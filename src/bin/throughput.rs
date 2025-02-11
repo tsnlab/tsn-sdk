@@ -353,7 +353,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
         last_id += 1;
 
-        if now.elapsed().as_secs() > duration as u64 || !unsafe { RUNNING } {
+        if now.elapsed().as_secs() >= duration as u64 || !unsafe { RUNNING } {
             break;
         }
     }

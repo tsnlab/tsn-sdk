@@ -174,14 +174,14 @@ fn do_server(iface_name: String) {
             Err(_) => continue,
         };
 
-        let eth_pkt: EthernetPacket = EthernetPacket::new(&packet).unwrap();
-        if eth_pkt.get_ethertype() != EtherType(ETHERTYPE_PERF) {
+        let src_eth_pkt: EthernetPacket = EthernetPacket::new(&packet).unwrap();
+        if src_eth_pkt.get_ethertype() != EtherType(ETHERTYPE_PERF) {
             continue;
         }
 
-        let perf_pkt: PerfPacket = PerfPacket::new(eth_pkt.payload()).unwrap();
+        let src_perf_pkt: PerfPacket = PerfPacket::new(src_eth_pkt.payload()).unwrap();
 
-        match perf_pkt.get_op() {
+        match src_perf_pkt.get_op() {
             PerfOpFieldValues::ReqStart => {
                 println!("Received ReqStart");
 
@@ -191,7 +191,7 @@ fn do_server(iface_name: String) {
                 }
 
                 let req_start: PerfStartReqPacket =
-                    PerfStartReqPacket::new(perf_pkt.payload()).unwrap();
+                    PerfStartReqPacket::new(src_perf_pkt.payload()).unwrap();
                 let duration: Duration = Duration::from_secs(req_start.get_duration().into());
 
                 unsafe {
@@ -209,11 +209,11 @@ fn do_server(iface_name: String) {
                 let mut eth_buffer = vec![0; 14 + 8];
 
                 let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-                perf_pkt.set_id(perf_pkt.get_id());
+                perf_pkt.set_id(src_perf_pkt.get_id());
                 perf_pkt.set_op(PerfOpFieldValues::ResStart);
 
                 let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
-                eth_pkt.set_destination(eth_pkt.get_source());
+                eth_pkt.set_destination(src_eth_pkt.get_source());
                 eth_pkt.set_source(my_mac);
                 eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 
@@ -224,7 +224,7 @@ fn do_server(iface_name: String) {
             }
             PerfOpFieldValues::Data => {
                 unsafe {
-                    STATS.last_id = perf_pkt.get_id();
+                    STATS.last_id = src_perf_pkt.get_id();
                     STATS.pkt_count += 1;
                     STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
                 }
@@ -238,11 +238,11 @@ fn do_server(iface_name: String) {
                 let mut eth_buffer = vec![0; 14 + 8];
 
                 let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-                perf_pkt.set_id(perf_pkt.get_id());
+                perf_pkt.set_id(src_perf_pkt.get_id());
                 perf_pkt.set_op(PerfOpFieldValues::ResEnd);
 
                 let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
-                eth_pkt.set_destination(eth_pkt.get_source());
+                eth_pkt.set_destination(src_eth_pkt.get_source());
                 eth_pkt.set_source(my_mac);
                 eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 

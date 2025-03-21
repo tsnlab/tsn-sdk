@@ -1,8 +1,8 @@
-# TSN library
+# TSN SDK
 
-![Build status](https://github.com/tsnlab/libtsn/actions/workflows/build.yml/badge.svg)
+![Build status](https://github.com/tsnlab/tsn-sdk/actions/workflows/build.yml/badge.svg)
 
-TSN library(libtsn) is a library for making <abbr title="Time Sensitive Networking">TSN</abbr> application.
+TSN SDK is a full suite for making <abbr title="Time Sensitive Networking">TSN</abbr> application.
 
 
 ## Build
@@ -46,5 +46,5 @@ sudo ./target/release/throughput client help
 
 ## License
 
-The libtsn is distributed under GPLv3 license. See [license](./LICENSE)  
+The TSN SDK is distributed under GPLv3 license. See [license](./LICENSE)  
 If you need other license than GPLv3 for proprietary use or professional support, please mail us to contact at tsnlab dot com.

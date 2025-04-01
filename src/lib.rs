@@ -16,7 +16,6 @@ use nix::{
 use std::io::{Error, ErrorKind};
 use std::{env, mem, str};
 use std::{mem::size_of, num::NonZeroUsize, os::raw::c_void, process, time::Duration};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 extern crate socket;
 
@@ -64,7 +63,7 @@ impl TsnSocket {
         enable_rx_timestamp(self, iov)
     }
 
-    pub fn get_rx_timestamp(&self) -> Result<SystemTime, u32> {
+    pub fn get_rx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_rx_timestamp(self)
     }
 
@@ -494,11 +493,12 @@ pub fn enable_rx_timestamp(sock: &mut TsnSocket, iov: &mut libc::iovec) -> Resul
     }
 }
 
-pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<SystemTime, u32> {
+pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
     let msg = match sock.msg {
         Some(msg) => msg,
         _ => {
-            return Err(1)
+            // TODO: It might be better to return sw timestamp
+            return Err(Error::new(ErrorKind::InvalidInput, "rx timestamp not enabled"));
         }
     };
     let mut tend: libc::timespec = libc::timespec {
@@ -529,11 +529,14 @@ pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<SystemTime, u32> {
                     mem::size_of_val(&tend),
                 );
             }
-            let time = UNIX_EPOCH + Duration::new(tend.tv_sec as u64, tend.tv_nsec as u32);
+            let time: time::Timespec = time::Timespec {
+                tv_sec: tend.tv_sec,
+                tv_nsec: tend.tv_nsec,
+            };
             return Ok(time);
         }
     }
-    Err(1)
+    Err(Error::new(ErrorKind::Other, "failed to get timestamp"))
 }
 
 pub fn timespecff_diff(start: &mut TimeSpec, stop: &mut TimeSpec, result: &mut TimeSpec) {

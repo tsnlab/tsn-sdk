@@ -189,20 +189,18 @@ fn do_server(iface_name: String) {
         iov_base: packet.as_mut_ptr() as *mut libc::c_void,
         iov_len: packet.len(),
     };
-    let is_rx_ts_enabled = match sock.enable_rx_timestamp(&mut iov) {
+    match sock.enable_rx_timestamp(&mut iov) {
         Ok(()) => {
             eprintln!("Socket RX timestamp enabled");
-            true
         }
         Err(e) => {
             eprintln!("Failed to set sock timestamp: {}", e);
-            false
         }
     };
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
-        let (mut rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
+        let (rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
             Some(value) => value,
             None => continue,
         };
@@ -210,11 +208,6 @@ fn do_server(iface_name: String) {
 
         match PerfOp::from_u8(perf_pkt.get_op()) {
             Some(PerfOp::Tx) => {
-                if is_rx_ts_enabled {
-                    if let Ok(ts) = sock.get_rx_timestamp() {
-                        rx_timestamp = ts;
-                    }
-                }
                 let tx_id = perf_pkt.get_id();
                 timestamps.insert(tx_id, rx_timestamp);
             }
@@ -455,7 +448,7 @@ fn recv_perf_packet<'a>(
                         continue;
                     }
                     match sock.get_rx_timestamp() {
-                        Ok(ts) => rx_timestamp = ts,
+                        Ok(ts) => rx_timestamp = UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32),
                         Err(_) => {
                             eprintln!("Failed to get RX timestamp");
                         }

@@ -301,11 +301,11 @@ fn do_client(args: ClientArgs) {
     eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 
     let mut rx_eth_buff = [0u8; 1514];
+    let mut iov: libc::iovec = libc::iovec {
+        iov_base: rx_eth_buff.as_mut_ptr() as *mut libc::c_void,
+        iov_len: rx_eth_buff.len(),
+    };
     if !args.oneway {
-        let mut iov: libc::iovec = libc::iovec {
-            iov_base: rx_eth_buff.as_mut_ptr() as *mut libc::c_void,
-            iov_len: rx_eth_buff.len(),
-        };
         if sock.enable_rx_timestamp(&mut iov).is_err() {
             eprintln!("Failed to enable RX timestamp");
         } else {

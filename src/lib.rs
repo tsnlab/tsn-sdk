@@ -55,12 +55,12 @@ impl TsnSocket {
         enable_tx_timestamp(self)
     }
 
-    pub fn enable_rx_timestamp(&self, iov: &mut libc::iovec) -> Result<msghdr, String> {
-        enable_rx_timestamp(self, iov)
-    }
-
     pub fn get_tx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_tx_timestamp(self)
+    }
+
+    pub fn enable_rx_timestamp(&self, iov: &mut libc::iovec) -> Result<msghdr, String> {
+        enable_rx_timestamp(self, iov)
     }
 
     pub fn get_rx_timestamp(&self, msg: msghdr) -> Result<SystemTime, u32> {

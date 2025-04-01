@@ -24,6 +24,7 @@ pub struct TsnSocket {
     pub fd: i32,
     pub ifname: String,
     pub vlanid: u16,
+    pub msg: Option<msghdr>,
 }
 
 mod cbs;
@@ -59,12 +60,12 @@ impl TsnSocket {
         get_tx_timestamp(self)
     }
 
-    pub fn enable_rx_timestamp(&self, iov: &mut libc::iovec) -> Result<msghdr, String> {
+    pub fn enable_rx_timestamp(&mut self, iov: &mut libc::iovec) -> Result<(), Error> {
         enable_rx_timestamp(self, iov)
     }
 
-    pub fn get_rx_timestamp(&self, msg: msghdr) -> Result<SystemTime, u32> {
-        get_rx_timestamp(msg)
+    pub fn get_rx_timestamp(&self) -> Result<SystemTime, u32> {
+        get_rx_timestamp(self)
     }
 
     pub fn close(&mut self) -> Result<(), String> {
@@ -191,6 +192,7 @@ pub fn sock_open(
         fd: sock,
         ifname: ifname.to_string(),
         vlanid,
+        msg: None,
     })
 }
 
@@ -456,7 +458,7 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
     Err(Error::new(ErrorKind::NotFound, "No timestamp found"))
 }
 
-pub fn enable_rx_timestamp(sock: &TsnSocket, iov: &mut libc::iovec) -> Result<msghdr, String> {
+pub fn enable_rx_timestamp(sock: &mut TsnSocket, iov: &mut libc::iovec) -> Result<(), Error> {
     const CONTROLSIZE: usize = 1024;
     let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
 
@@ -485,16 +487,20 @@ pub fn enable_rx_timestamp(sock: &TsnSocket, iov: &mut libc::iovec) -> Result<ms
     };
 
     if res < 0 {
-        Err(format!(
-            "Cannot set socket timestamp: {}",
-            Error::last_os_error()
-        ))
+        Err(Error::last_os_error())
     } else {
-        Ok(msg)
+        sock.msg = Some(msg);
+        Ok(())
     }
 }
 
-pub fn get_rx_timestamp(msg: msghdr) -> Result<SystemTime, u32> {
+pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<SystemTime, u32> {
+    let msg = match sock.msg {
+        Some(msg) => msg,
+        _ => {
+            return Err(1)
+        }
+    };
     let mut tend: libc::timespec = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

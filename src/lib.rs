@@ -1,6 +1,6 @@
 use core::slice;
 use nix::net::if_::if_nametoindex;
-use nix::sys::socket::msghdr;
+use nix::sys::socket::{cmsghdr, msghdr};
 use nix::sys::time::{TimeSpec, TimeValLike};
 use nix::unistd::close;
 use nix::{
@@ -16,6 +16,7 @@ use nix::{
 use std::io::{Error, ErrorKind};
 use std::{env, mem, str};
 use std::{mem::size_of, num::NonZeroUsize, os::raw::c_void, process, time::Duration};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 extern crate socket;
 
@@ -60,6 +61,10 @@ impl TsnSocket {
 
     pub fn get_tx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_tx_timestamp(self)
+    }
+
+    pub fn get_rx_timestamp(&self, msg: msghdr) -> Result<SystemTime, u32> {
+        get_rx_timestamp(msg)
     }
 
     pub fn close(&mut self) -> Result<(), String> {
@@ -487,6 +492,42 @@ pub fn enable_rx_timestamp(sock: &TsnSocket, iov: &mut libc::iovec) -> Result<ms
     } else {
         Ok(msg)
     }
+}
+
+pub fn get_rx_timestamp(msg: msghdr) -> Result<SystemTime, u32> {
+    let mut tend: libc::timespec = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let mut cmsg: *mut cmsghdr;
+
+    let mut cmsg_level;
+    let mut cmsg_type;
+    unsafe {
+        cmsg = libc::CMSG_FIRSTHDR(&msg);
+    }
+    while !cmsg.is_null() {
+        unsafe {
+            cmsg_level = (*cmsg).cmsg_level;
+            cmsg_type = (*cmsg).cmsg_type;
+            if cmsg_level != libc::SOL_SOCKET {
+                cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+                continue;
+            }
+        }
+        if libc::SO_TIMESTAMPNS == cmsg_type {
+            unsafe {
+                libc::memcpy(
+                    &mut tend as *mut _ as *mut libc::c_void,
+                    libc::CMSG_DATA(cmsg) as *const libc::c_void,
+                    mem::size_of_val(&tend),
+                );
+            }
+            let time = UNIX_EPOCH + Duration::new(tend.tv_sec as u64, tend.tv_nsec as u32);
+            return Ok(time);
+        }
+    }
+    Err(1)
 }
 
 pub fn timespecff_diff(start: &mut TimeSpec, stop: &mut TimeSpec, result: &mut TimeSpec) {

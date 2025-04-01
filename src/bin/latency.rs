@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::io::Error;
-use std::mem;
 use std::option::Option;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::vec::Vec;
 
-use nix::sys::socket::{cmsghdr, msghdr};
+use nix::sys::socket::msghdr;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use rand::Rng;
@@ -214,7 +212,7 @@ fn do_server(iface_name: String) {
         match PerfOp::from_u8(perf_pkt.get_op()) {
             Some(PerfOp::Tx) => {
                 if let Some(msg) = msg {
-                    if let Ok(ts) = get_rx_timestamp(msg) {
+                    if let Ok(ts) = sock.get_rx_timestamp(msg) {
                         rx_timestamp = ts;
                     }
                 }
@@ -464,7 +462,7 @@ fn recv_perf_packet<'a>(
                         eprintln!("????");
                         continue;
                     }
-                    match get_rx_timestamp(msg) {
+                    match sock.get_rx_timestamp(msg) {
                         Ok(ts) => rx_timestamp = ts,
                         Err(_) => {
                             eprintln!("Failed to get RX timestamp");
@@ -511,40 +509,4 @@ fn print_latency(id: usize, rx_timestamp: SystemTime, tx_timestamp: SystemTime) 
         rx_ns % 1_000_000_000,
         elapsed_ns
     );
-}
-
-fn get_rx_timestamp(msg: msghdr) -> Result<SystemTime, u32> {
-    let mut tend: libc::timespec = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    let mut cmsg: *mut cmsghdr;
-
-    let mut cmsg_level;
-    let mut cmsg_type;
-    unsafe {
-        cmsg = libc::CMSG_FIRSTHDR(&msg);
-    }
-    while !cmsg.is_null() {
-        unsafe {
-            cmsg_level = (*cmsg).cmsg_level;
-            cmsg_type = (*cmsg).cmsg_type;
-            if cmsg_level != libc::SOL_SOCKET {
-                cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-                continue;
-            }
-        }
-        if libc::SO_TIMESTAMPNS == cmsg_type {
-            unsafe {
-                libc::memcpy(
-                    &mut tend as *mut _ as *mut libc::c_void,
-                    libc::CMSG_DATA(cmsg) as *const libc::c_void,
-                    mem::size_of_val(&tend),
-                );
-            }
-            let time = UNIX_EPOCH + Duration::new(tend.tv_sec as u64, tend.tv_nsec as u32);
-            return Ok(time);
-        }
-    }
-    Err(1)
 }

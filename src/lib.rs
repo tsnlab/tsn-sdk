@@ -54,6 +54,10 @@ impl TsnSocket {
         enable_tx_timestamp(self)
     }
 
+    pub fn enable_rx_timestamp(&self, iov: &mut libc::iovec) -> Result<msghdr, String> {
+        enable_rx_timestamp(self, iov)
+    }
+
     pub fn get_tx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_tx_timestamp(self)
     }
@@ -445,6 +449,44 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
     }
 
     Err(Error::new(ErrorKind::NotFound, "No timestamp found"))
+}
+
+pub fn enable_rx_timestamp(sock: &TsnSocket, iov: &mut libc::iovec) -> Result<msghdr, String> {
+    const CONTROLSIZE: usize = 1024;
+    let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
+
+    let msg = msghdr {
+        msg_iov: iov,
+        msg_iovlen: 1,
+        msg_control: control.as_mut_ptr() as *mut libc::c_void,
+        msg_controllen: CONTROLSIZE,
+        msg_flags: 0,
+        msg_name: std::ptr::null_mut::<libc::c_void>(),
+        msg_namelen: 0,
+    };
+
+    let sockflags: u32 = libc::SOF_TIMESTAMPING_RX_HARDWARE
+        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
+        | libc::SOF_TIMESTAMPING_SOFTWARE;
+
+    let res = unsafe {
+        libc::setsockopt(
+            sock.fd,
+            libc::SOL_SOCKET,
+            libc::SO_TIMESTAMPNS,
+            &sockflags as *const u32 as *const libc::c_void,
+            mem::size_of_val(&sockflags) as u32,
+        )
+    };
+
+    if res < 0 {
+        Err(format!(
+            "Cannot set socket timestamp: {}",
+            Error::last_os_error()
+        ))
+    } else {
+        Ok(msg)
+    }
 }
 
 pub fn timespecff_diff(start: &mut TimeSpec, stop: &mut TimeSpec, result: &mut TimeSpec) {

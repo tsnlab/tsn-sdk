@@ -192,7 +192,7 @@ fn do_server(iface_name: String) {
         iov_base: packet.as_mut_ptr() as *mut libc::c_void,
         iov_len: packet.len(),
     };
-    let msg: Option<msghdr> = match enable_rx_timestamp(&sock, &mut iov) {
+    let msg: Option<msghdr> = match sock.enable_rx_timestamp(&mut iov) {
         Ok(msg) => {
             eprintln!("Socket RX timestamp enabled");
             Some(msg)
@@ -317,7 +317,7 @@ fn do_client(args: ClientArgs) {
     };
     let msg: Option<msghdr> = match args.oneway {
         true => None,
-        false => match enable_rx_timestamp(&sock, &mut iov) {
+        false => match sock.enable_rx_timestamp(&mut iov) {
             Ok(msg) => {
                 eprintln!("Set sock timestamp");
                 Some(msg)
@@ -511,44 +511,6 @@ fn print_latency(id: usize, rx_timestamp: SystemTime, tx_timestamp: SystemTime) 
         rx_ns % 1_000_000_000,
         elapsed_ns
     );
-}
-
-fn enable_rx_timestamp(sock: &tsn::TsnSocket, iov: &mut libc::iovec) -> Result<msghdr, String> {
-    const CONTROLSIZE: usize = 1024;
-    let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
-
-    let msg = msghdr {
-        msg_iov: iov,
-        msg_iovlen: 1,
-        msg_control: control.as_mut_ptr() as *mut libc::c_void,
-        msg_controllen: CONTROLSIZE,
-        msg_flags: 0,
-        msg_name: std::ptr::null_mut::<libc::c_void>(),
-        msg_namelen: 0,
-    };
-
-    let sockflags: u32 = libc::SOF_TIMESTAMPING_RX_HARDWARE
-        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
-        | libc::SOF_TIMESTAMPING_SOFTWARE;
-
-    let res = unsafe {
-        libc::setsockopt(
-            sock.fd,
-            libc::SOL_SOCKET,
-            libc::SO_TIMESTAMPNS,
-            &sockflags as *const u32 as *const libc::c_void,
-            mem::size_of_val(&sockflags) as u32,
-        )
-    };
-
-    if res < 0 {
-        Err(format!(
-            "Cannot set socket timestamp: {}",
-            Error::last_os_error()
-        ))
-    } else {
-        Ok(msg)
-    }
 }
 
 fn get_rx_timestamp(msg: msghdr) -> Result<SystemTime, u32> {

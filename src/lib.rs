@@ -1,6 +1,6 @@
 use core::slice;
 use nix::net::if_::if_nametoindex;
-use nix::sys::socket::msghdr;
+use nix::sys::socket::{cmsghdr, msghdr};
 use nix::sys::time::{TimeSpec, TimeValLike};
 use nix::unistd::close;
 use nix::{
@@ -23,6 +23,7 @@ pub struct TsnSocket {
     pub fd: i32,
     pub ifname: String,
     pub vlanid: u16,
+    pub msg: Option<msghdr>,
 }
 
 mod cbs;
@@ -56,6 +57,14 @@ impl TsnSocket {
 
     pub fn get_tx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_tx_timestamp(self)
+    }
+
+    pub fn enable_rx_timestamp(&mut self, iov: &mut libc::iovec) -> Result<(), Error> {
+        enable_rx_timestamp(self, iov)
+    }
+
+    pub fn get_rx_timestamp(&self) -> Result<time::Timespec, Error> {
+        get_rx_timestamp(self)
     }
 
     pub fn close(&mut self) -> Result<(), String> {
@@ -182,6 +191,7 @@ pub fn sock_open(
         fd: sock,
         ifname: ifname.to_string(),
         vlanid,
+        msg: None,
     })
 }
 
@@ -445,6 +455,88 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
     }
 
     Err(Error::new(ErrorKind::NotFound, "No timestamp found"))
+}
+
+pub fn enable_rx_timestamp(sock: &mut TsnSocket, iov: &mut libc::iovec) -> Result<(), Error> {
+    const CONTROLSIZE: usize = 1024;
+    let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
+
+    let msg = msghdr {
+        msg_iov: iov,
+        msg_iovlen: 1,
+        msg_control: control.as_mut_ptr() as *mut libc::c_void,
+        msg_controllen: CONTROLSIZE,
+        msg_flags: 0,
+        msg_name: std::ptr::null_mut::<libc::c_void>(),
+        msg_namelen: 0,
+    };
+
+    let sockflags: u32 = libc::SOF_TIMESTAMPING_RX_HARDWARE
+        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
+        | libc::SOF_TIMESTAMPING_SOFTWARE;
+
+    let res = unsafe {
+        libc::setsockopt(
+            sock.fd,
+            libc::SOL_SOCKET,
+            libc::SO_TIMESTAMPNS,
+            &sockflags as *const u32 as *const libc::c_void,
+            mem::size_of_val(&sockflags) as u32,
+        )
+    };
+
+    if res < 0 {
+        Err(Error::last_os_error())
+    } else {
+        sock.msg = Some(msg);
+        Ok(())
+    }
+}
+
+pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
+    let msg = match sock.msg {
+        Some(msg) => msg,
+        _ => {
+            // TODO: It might be better to return sw timestamp
+            return Err(Error::new(ErrorKind::InvalidInput, "rx timestamp not enabled"));
+        }
+    };
+    let mut tend: libc::timespec = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let mut cmsg: *mut cmsghdr;
+
+    let mut cmsg_level;
+    let mut cmsg_type;
+    unsafe {
+        cmsg = libc::CMSG_FIRSTHDR(&msg);
+    }
+    while !cmsg.is_null() {
+        unsafe {
+            cmsg_level = (*cmsg).cmsg_level;
+            cmsg_type = (*cmsg).cmsg_type;
+            if cmsg_level != libc::SOL_SOCKET {
+                cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+                continue;
+            }
+        }
+        if libc::SO_TIMESTAMPNS == cmsg_type {
+            unsafe {
+                libc::memcpy(
+                    &mut tend as *mut _ as *mut libc::c_void,
+                    libc::CMSG_DATA(cmsg) as *const libc::c_void,
+                    mem::size_of_val(&tend),
+                );
+            }
+            let time: time::Timespec = time::Timespec {
+                tv_sec: tend.tv_sec,
+                tv_nsec: tend.tv_nsec,
+            };
+            return Ok(time);
+        }
+    }
+    Err(Error::new(ErrorKind::Other, "failed to get timestamp"))
 }
 
 pub fn timespecff_diff(start: &mut TimeSpec, stop: &mut TimeSpec, result: &mut TimeSpec) {

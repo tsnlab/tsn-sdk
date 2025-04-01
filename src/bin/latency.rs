@@ -1,12 +1,9 @@
 use std::collections::HashMap;
-use std::io::Error;
-use std::mem;
 use std::option::Option;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::vec::Vec;
 
-use nix::sys::socket::{cmsghdr, msghdr};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use rand::Rng;
@@ -192,20 +189,18 @@ fn do_server(iface_name: String) {
         iov_base: packet.as_mut_ptr() as *mut libc::c_void,
         iov_len: packet.len(),
     };
-    let msg: Option<msghdr> = match enable_rx_timestamp(&sock, &mut iov) {
-        Ok(msg) => {
+    match sock.enable_rx_timestamp(&mut iov) {
+        Ok(()) => {
             eprintln!("Socket RX timestamp enabled");
-            Some(msg)
         }
         Err(e) => {
             eprintln!("Failed to set sock timestamp: {}", e);
-            None
         }
     };
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
-        let (mut rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, msg, &mut packet) {
+        let (rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
             Some(value) => value,
             None => continue,
         };
@@ -213,11 +208,6 @@ fn do_server(iface_name: String) {
 
         match PerfOp::from_u8(perf_pkt.get_op()) {
             Some(PerfOp::Tx) => {
-                if let Some(msg) = msg {
-                    if let Ok(ts) = get_rx_timestamp(msg) {
-                        rx_timestamp = ts;
-                    }
-                }
                 let tx_id = perf_pkt.get_id();
                 timestamps.insert(tx_id, rx_timestamp);
             }
@@ -315,19 +305,13 @@ fn do_client(args: ClientArgs) {
         iov_base: rx_eth_buff.as_mut_ptr() as *mut libc::c_void,
         iov_len: rx_eth_buff.len(),
     };
-    let msg: Option<msghdr> = match args.oneway {
-        true => None,
-        false => match enable_rx_timestamp(&sock, &mut iov) {
-            Ok(msg) => {
-                eprintln!("Set sock timestamp");
-                Some(msg)
-            }
-            Err(e) => {
-                eprintln!("Failed to set sock timestamp: {}", e);
-                None
-            }
-        },
-    };
+    if !args.oneway {
+        if sock.enable_rx_timestamp(&mut iov).is_err() {
+            eprintln!("Failed to enable RX timestamp");
+        } else {
+            eprintln!("Socket RX timestamp enabled");
+        }
+    }
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
 
     for ping_id in 1..=args.count {
@@ -384,7 +368,7 @@ fn do_client(args: ClientArgs) {
             }
         } else {
             timestamps.insert(ping_id as u32, tx_timestamp);
-            let (rx_timestamp, rx_eth_pkt) = match recv_perf_packet(&sock, msg, &mut rx_eth_buff) {
+            let (rx_timestamp, rx_eth_pkt) = match recv_perf_packet(&sock, &mut rx_eth_buff) {
                 Some(value) => value,
                 None => continue,
             };
@@ -421,7 +405,7 @@ fn do_client(args: ClientArgs) {
 
     let wait_start = Instant::now();
     while !timestamps.is_empty() && wait_start.elapsed().as_secs() < TIMEOUT_SEC {
-        let (rx_timestamp, rx_eth_pkt) = match recv_perf_packet(&sock, msg, &mut rx_eth_buff) {
+        let (rx_timestamp, rx_eth_pkt) = match recv_perf_packet(&sock, &mut rx_eth_buff) {
             Some(value) => value,
             None => continue,
         };
@@ -447,14 +431,13 @@ fn do_client(args: ClientArgs) {
 
 fn recv_perf_packet<'a>(
     sock: &tsn::TsnSocket,
-    msg: Option<msghdr>,
     packet: &'a mut [u8; 1514],
 ) -> Option<(SystemTime, MutableEthernetPacket<'a>)> {
     let start = Instant::now();
     while start.elapsed().as_secs() < TIMEOUT_SEC {
         let mut rx_timestamp;
         let recv_bytes = {
-            match msg {
+            match sock.msg {
                 Some(mut msg) => {
                     let res = unsafe { libc::recvmsg(sock.fd, &mut msg, 0) };
                     rx_timestamp = SystemTime::now(); // Fallback default value
@@ -464,8 +447,8 @@ fn recv_perf_packet<'a>(
                         eprintln!("????");
                         continue;
                     }
-                    match get_rx_timestamp(msg) {
-                        Ok(ts) => rx_timestamp = ts,
+                    match sock.get_rx_timestamp() {
+                        Ok(ts) => rx_timestamp = UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32),
                         Err(_) => {
                             eprintln!("Failed to get RX timestamp");
                         }
@@ -511,78 +494,4 @@ fn print_latency(id: usize, rx_timestamp: SystemTime, tx_timestamp: SystemTime) 
         rx_ns % 1_000_000_000,
         elapsed_ns
     );
-}
-
-fn enable_rx_timestamp(sock: &tsn::TsnSocket, iov: &mut libc::iovec) -> Result<msghdr, String> {
-    const CONTROLSIZE: usize = 1024;
-    let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
-
-    let msg = msghdr {
-        msg_iov: iov,
-        msg_iovlen: 1,
-        msg_control: control.as_mut_ptr() as *mut libc::c_void,
-        msg_controllen: CONTROLSIZE,
-        msg_flags: 0,
-        msg_name: std::ptr::null_mut::<libc::c_void>(),
-        msg_namelen: 0,
-    };
-
-    let sockflags: u32 = libc::SOF_TIMESTAMPING_RX_HARDWARE
-        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
-        | libc::SOF_TIMESTAMPING_SOFTWARE;
-
-    let res = unsafe {
-        libc::setsockopt(
-            sock.fd,
-            libc::SOL_SOCKET,
-            libc::SO_TIMESTAMPNS,
-            &sockflags as *const u32 as *const libc::c_void,
-            mem::size_of_val(&sockflags) as u32,
-        )
-    };
-
-    if res < 0 {
-        Err(format!(
-            "Cannot set socket timestamp: {}",
-            Error::last_os_error()
-        ))
-    } else {
-        Ok(msg)
-    }
-}
-
-fn get_rx_timestamp(msg: msghdr) -> Result<SystemTime, u32> {
-    let mut tend: libc::timespec = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    let mut cmsg: *mut cmsghdr;
-
-    let mut cmsg_level;
-    let mut cmsg_type;
-    unsafe {
-        cmsg = libc::CMSG_FIRSTHDR(&msg);
-    }
-    while !cmsg.is_null() {
-        unsafe {
-            cmsg_level = (*cmsg).cmsg_level;
-            cmsg_type = (*cmsg).cmsg_type;
-            if cmsg_level != libc::SOL_SOCKET {
-                cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-                continue;
-            }
-        }
-        if libc::SO_TIMESTAMPNS == cmsg_type {
-            unsafe {
-                libc::memcpy(
-                    &mut tend as *mut _ as *mut libc::c_void,
-                    libc::CMSG_DATA(cmsg) as *const libc::c_void,
-                    mem::size_of_val(&tend),
-                );
-            }
-            let time = UNIX_EPOCH + Duration::new(tend.tv_sec as u64, tend.tv_nsec as u32);
-            return Ok(time);
-        }
-    }
-    Err(1)
 }

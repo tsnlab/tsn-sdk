@@ -154,9 +154,6 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	spend_qav_credit(tsn_config, from, tc_id, metadata->frame_length);
 	tsn_config->queue_available_at[queue_prio] += duration_ns;
 	tsn_config->total_available_at += duration_ns;
-	if (is_gptp) {
-		tsn_config->total_available_at += 500000;
-	}
 
 	free_at = max(timestamps.to + duration_ns, tsn_config->total_available_at);
 	if (append_buffer_track(buffer_tracker) == false) {

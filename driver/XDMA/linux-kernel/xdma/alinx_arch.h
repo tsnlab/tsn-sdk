@@ -132,16 +132,27 @@ struct tsn_config {
 u32 read32(void * addr);
 void write32(u32 val, void * addr);
 
+void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time);
 void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time);
+sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *pdev);
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev);
+void alinx_set_cycle_1s_by_xdev(struct xdma_dev *xdev, u32 cycle_1s);
 void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s);
+u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_cycle_1s(struct pci_dev *pdev);
+timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev *xdev, int tx_id);
 timestamp_t alinx_read_tx_timestamp(struct pci_dev *pdev, int tx_id);
+u64 alinx_get_tx_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_tx_packets(struct pci_dev *pdev);
+u64 alinx_get_tx_drop_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_tx_drop_packets(struct pci_dev *pdev);
+u64 alinx_get_normal_timeout_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_normal_timeout_packets(struct pci_dev *pdev);
+u64 alinx_get_to_overflow_popped_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_to_overflow_popped_packets(struct pci_dev *pdev);
+u64 alinx_get_to_overflow_timeout_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_to_overflow_timeout_packets(struct pci_dev *pdev);
+u64 alinx_get_total_tx_drop_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_tx_drop_packets(struct pci_dev *pdev);
 
 void dump_buffer(unsigned char* buffer, int len);

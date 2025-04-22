@@ -165,6 +165,8 @@ fn do_server(iface_name: String) {
         }
     });
 
+    let mut received_first_data = false;
+
     while unsafe { RUNNING } {
         let mut packet = [0u8; 1514];
         let packet_size;
@@ -202,9 +204,6 @@ fn do_server(iface_name: String) {
                     TEST_RUNNING = true;
                 }
 
-                // Make thread for statistics
-                thread::spawn(stats_worker);
-
                 let mut perf_buffer = vec![0; 8];
                 let mut eth_buffer = vec![0; 14 + 8];
 
@@ -223,6 +222,11 @@ fn do_server(iface_name: String) {
                 }
             }
             PerfOpFieldValues::Data => {
+                if !received_first_data {
+                    // Make thread for statistics
+                    received_first_data = true;
+                    thread::spawn(stats_worker);
+                }
                 unsafe {
                     STATS.last_id = perf_pkt.get_id();
                     STATS.pkt_count += 1;
@@ -233,6 +237,7 @@ fn do_server(iface_name: String) {
                 println!("Received ReqEnd");
 
                 unsafe { TEST_RUNNING = false }
+                received_first_data = false;
 
                 let mut perf_buffer = vec![0; 8];
                 let mut eth_buffer = vec![0; 14 + 8];
@@ -308,6 +313,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
     eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
     eth_pkt.set_payload(perf_pkt.packet());
 
+    let mut response_received = false;
+
     for _ in 0..3 {
         if let Err(e) = sock.send(eth_pkt.packet()) {
             eprintln!("Failed to send packet: {}", e)
@@ -315,8 +322,16 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
         match wait_for_response(&mut sock, PerfOpFieldValues::ResStart) {
             Err(_) => eprintln!("No response, retrying..."),
-            Ok(_) => break,
+            Ok(_) => {
+                response_received = true;
+                break;
+            },
         }
+    }
+
+    if !response_received {
+        eprintln!("Server is not responding");
+        return;
     }
 
     unsafe {

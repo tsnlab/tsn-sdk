@@ -313,6 +313,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
     eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
     eth_pkt.set_payload(perf_pkt.packet());
 
+    let mut response_received = false;
+
     for _ in 0..3 {
         if let Err(e) = sock.send(eth_pkt.packet()) {
             eprintln!("Failed to send packet: {}", e)
@@ -320,8 +322,16 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
         match wait_for_response(&mut sock, PerfOpFieldValues::ResStart) {
             Err(_) => eprintln!("No response, retrying..."),
-            Ok(_) => break,
+            Ok(_) => {
+                response_received = true;
+                break;
+            },
         }
+    }
+
+    if !response_received {
+        eprintln!("Server is not responding");
+        return;
     }
 
     unsafe {

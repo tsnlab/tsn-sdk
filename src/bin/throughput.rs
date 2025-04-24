@@ -110,6 +110,11 @@ fn main() {
             arg!(duration: -d --duration <duration>)
                 .required(false)
                 .default_value("10"),
+        )
+        .arg(
+            arg!(warmup: -w --warmup <warmup>)
+                .required(false)
+                .default_value("0"),
         );
 
     let matched_command = Command::new("throughput")

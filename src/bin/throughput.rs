@@ -242,8 +242,8 @@ fn do_server(iface_name: String) {
             }
             PerfOpFieldValues::Data => {
                 unsafe {
+                    STATS.last_id = perf_pkt.get_id();
                     if !STATS.warming_up {
-                        STATS.last_id = perf_pkt.get_id();
                         STATS.pkt_count += 1;
                         STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
                     }

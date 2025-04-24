@@ -478,7 +478,7 @@ fn stats_worker() {
         let packets = total_packets - last_packets;
         let loss_rate = 1.0 - packets as f64 / (id - last_id) as f64;
 
-        let lap = start_time.elapsed().as_secs();
+        let lap = start_time.elapsed().as_secs() - stats.warmup as u64;
 
         if lap > stats.duration as u64 {
             unsafe {

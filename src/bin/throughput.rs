@@ -65,6 +65,7 @@ pub struct Perf {
 #[packet]
 pub struct PerfStartReq {
     duration: u32be,
+    warmup: u32be,
     #[payload]
     payload: Vec<u8>,
 }
@@ -74,6 +75,8 @@ struct Statistics {
     total_bytes: usize,
     last_id: u32,
     duration: usize,
+    warmup: usize,
+    warming_up: bool,
 }
 
 static mut STATS: Statistics = Statistics {
@@ -81,6 +84,8 @@ static mut STATS: Statistics = Statistics {
     total_bytes: 0,
     last_id: 0,
     duration: 0,
+    warmup: 0,
+    warming_up: false,
 };
 
 unsafe impl Send for Statistics {}
@@ -130,8 +135,13 @@ fn main() {
                 .unwrap()
                 .parse()
                 .unwrap();
+            let warmup: usize = client_matches
+                .value_of("warmup")
+                .unwrap()
+                .parse()
+                .unwrap();
 
-            do_client(iface, target, size, duration)
+            do_client(iface, target, size, duration, warmup)
         }
         _ => panic!("Invalid command"),
     }
@@ -193,12 +203,15 @@ fn do_server(iface_name: String) {
                 let req_start: PerfStartReqPacket =
                     PerfStartReqPacket::new(perf_pkt.payload()).unwrap();
                 let duration: Duration = Duration::from_secs(req_start.get_duration().into());
+                let warmup: Duration = Duration::from_secs(req_start.get_warmup().into());
 
                 unsafe {
                     STATS.duration = duration.as_secs() as usize;
+                    STATS.warmup = warmup.as_secs() as usize;
                     STATS.pkt_count = 0;
                     STATS.total_bytes = 0;
                     STATS.last_id = 0;
+                    STATS.warming_up = if STATS.warmup > 0 { true } else { false };
                     TEST_RUNNING = true;
                 }
 
@@ -224,9 +237,11 @@ fn do_server(iface_name: String) {
             }
             PerfOpFieldValues::Data => {
                 unsafe {
-                    STATS.last_id = perf_pkt.get_id();
-                    STATS.pkt_count += 1;
-                    STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
+                    if !STATS.warming_up {
+                        STATS.last_id = perf_pkt.get_id();
+                        STATS.pkt_count += 1;
+                        STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
+                    }
                 }
             }
             PerfOpFieldValues::ReqEnd => {
@@ -271,7 +286,7 @@ fn do_server(iface_name: String) {
     }
 }
 
-fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
+fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
@@ -296,6 +311,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
     let mut perf_req_start_pkt = MutablePerfStartReqPacket::new(&mut req_start_buffer).unwrap();
     perf_req_start_pkt.set_duration(duration.try_into().unwrap());
+    perf_req_start_pkt.set_warmup(warmup.try_into().unwrap());
 
     let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
     perf_pkt.set_id(0xdeadbeef); // TODO: Randomize
@@ -363,7 +379,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
         last_id += 1;
 
-        if now.elapsed().as_secs() > duration as u64 || !unsafe { RUNNING } {
+        if now.elapsed().as_secs() > (duration + warmup) as u64 || !unsafe { RUNNING } {
             break;
         }
     }
@@ -434,6 +450,13 @@ fn stats_worker() {
     let mut last_time = start_time;
 
     const SECOND: Duration = Duration::from_secs(1);
+
+    if stats.warming_up {
+        println!("Warming up");
+        thread::sleep(Duration::from_secs(stats.warmup as u64));
+        println!("Finished warmup");
+        stats.warming_up = false;
+    }
 
     while unsafe { TEST_RUNNING } {
         let elapsed = last_time.elapsed();

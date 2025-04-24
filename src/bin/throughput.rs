@@ -461,6 +461,8 @@ fn stats_worker() {
         stats.warming_up = false;
     }
 
+    last_id = stats.last_id;
+
     let start_time = Instant::now();
     let mut last_time = start_time;
 

@@ -258,11 +258,11 @@ fn do_server(iface_name: String) {
                 let mut eth_buffer = vec![0; 14 + 8];
 
                 let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-                perf_pkt.set_id(perf_pkt.get_id());
+                perf_pkt.set_id(recv_perf_pkt.get_id());
                 perf_pkt.set_op(PerfOpFieldValues::ResEnd);
 
                 let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
-                eth_pkt.set_destination(eth_pkt.get_source());
+                eth_pkt.set_destination(recv_eth_pkt.get_source());
                 eth_pkt.set_source(my_mac);
                 eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 

@@ -451,8 +451,6 @@ fn stats_worker() {
     let mut last_id = 0;
     let mut last_bytes = 0;
     let mut last_packets = 0;
-    let start_time = Instant::now();
-    let mut last_time = start_time;
 
     const SECOND: Duration = Duration::from_secs(1);
 
@@ -462,6 +460,9 @@ fn stats_worker() {
         println!("Finished warmup");
         stats.warming_up = false;
     }
+
+    let start_time = Instant::now();
+    let mut last_time = start_time;
 
     while unsafe { TEST_RUNNING } {
         let elapsed = last_time.elapsed();
@@ -478,7 +479,7 @@ fn stats_worker() {
         let packets = total_packets - last_packets;
         let loss_rate = 1.0 - packets as f64 / (id - last_id) as f64;
 
-        let lap = start_time.elapsed().as_secs() - stats.warmup as u64;
+        let lap = start_time.elapsed().as_secs();
 
         if lap > stats.duration as u64 {
             unsafe {

@@ -310,9 +310,9 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
     // Request start
     println!("Requesting start");
-    let mut req_start_buffer = vec![0; 4];
-    let mut perf_buffer = vec![0; 8 + 4];
-    let mut eth_buffer = vec![0; 14 + 8 + 4];
+    let mut req_start_buffer = vec![0; 8];
+    let mut perf_buffer = vec![0; 8 + 8];
+    let mut eth_buffer = vec![0; 14 + 8 + 8];
 
     let mut perf_req_start_pkt = MutablePerfStartReqPacket::new(&mut req_start_buffer).unwrap();
     perf_req_start_pkt.set_duration(duration.try_into().unwrap());

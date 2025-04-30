@@ -65,8 +65,17 @@ pub struct Perf {
 #[packet]
 pub struct PerfStartReq {
     duration: u32be,
+    warmup: u32be,
     #[payload]
     payload: Vec<u8>,
+}
+
+#[derive(PartialEq, Eq)]
+enum WarmupState {
+    None = 0,
+    Ready = 1,
+    WarmingUp = 2,
+    Finished = 3,
 }
 
 struct Statistics {
@@ -74,6 +83,8 @@ struct Statistics {
     total_bytes: usize,
     last_id: u32,
     duration: usize,
+    warmup: usize,
+    warmup_state: WarmupState,
 }
 
 static mut STATS: Statistics = Statistics {
@@ -81,6 +92,8 @@ static mut STATS: Statistics = Statistics {
     total_bytes: 0,
     last_id: 0,
     duration: 0,
+    warmup: 0,
+    warmup_state: WarmupState::None,
 };
 
 unsafe impl Send for Statistics {}
@@ -105,6 +118,11 @@ fn main() {
             arg!(duration: -d --duration <duration>)
                 .required(false)
                 .default_value("10"),
+        )
+        .arg(
+            arg!(warmup: -w --warmup <warmup>)
+                .required(false)
+                .default_value("0"),
         );
 
     let matched_command = Command::new("throughput")
@@ -130,8 +148,13 @@ fn main() {
                 .unwrap()
                 .parse()
                 .unwrap();
+            let warmup: usize = client_matches
+                .value_of("warmup")
+                .unwrap()
+                .parse()
+                .unwrap();
 
-            do_client(iface, target, size, duration)
+            do_client(iface, target, size, duration, warmup)
         }
         _ => panic!("Invalid command"),
     }
@@ -165,8 +188,6 @@ fn do_server(iface_name: String) {
         }
     });
 
-    let mut received_first_data = false;
-
     while unsafe { RUNNING } {
         let mut packet = [0u8; 1514];
         let packet_size;
@@ -176,14 +197,14 @@ fn do_server(iface_name: String) {
             Err(_) => continue,
         };
 
-        let eth_pkt: EthernetPacket = EthernetPacket::new(&packet).unwrap();
-        if eth_pkt.get_ethertype() != EtherType(ETHERTYPE_PERF) {
+        let recv_eth_pkt: EthernetPacket = EthernetPacket::new(&packet).unwrap();
+        if recv_eth_pkt.get_ethertype() != EtherType(ETHERTYPE_PERF) {
             continue;
         }
 
-        let perf_pkt: PerfPacket = PerfPacket::new(eth_pkt.payload()).unwrap();
+        let recv_perf_pkt: PerfPacket = PerfPacket::new(recv_eth_pkt.payload()).unwrap();
 
-        match perf_pkt.get_op() {
+        match recv_perf_pkt.get_op() {
             PerfOpFieldValues::ReqStart => {
                 println!("Received ReqStart");
 
@@ -193,26 +214,32 @@ fn do_server(iface_name: String) {
                 }
 
                 let req_start: PerfStartReqPacket =
-                    PerfStartReqPacket::new(perf_pkt.payload()).unwrap();
+                    PerfStartReqPacket::new(recv_perf_pkt.payload()).unwrap();
                 let duration: Duration = Duration::from_secs(req_start.get_duration().into());
+                let warmup: Duration = Duration::from_secs(req_start.get_warmup().into());
 
                 unsafe {
                     STATS.duration = duration.as_secs() as usize;
+                    STATS.warmup = warmup.as_secs() as usize;
                     STATS.pkt_count = 0;
                     STATS.total_bytes = 0;
                     STATS.last_id = 0;
+                    STATS.warmup_state = if STATS.warmup > 0 { WarmupState::Ready } else { WarmupState::None };
                     TEST_RUNNING = true;
                 }
+
+                // Make thread for statistics
+                thread::spawn(stats_worker);
 
                 let mut perf_buffer = vec![0; 8];
                 let mut eth_buffer = vec![0; 14 + 8];
 
                 let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-                perf_pkt.set_id(perf_pkt.get_id());
+                perf_pkt.set_id(recv_perf_pkt.get_id());
                 perf_pkt.set_op(PerfOpFieldValues::ResStart);
 
                 let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
-                eth_pkt.set_destination(eth_pkt.get_source());
+                eth_pkt.set_destination(recv_eth_pkt.get_source());
                 eth_pkt.set_source(my_mac);
                 eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 
@@ -222,32 +249,28 @@ fn do_server(iface_name: String) {
                 }
             }
             PerfOpFieldValues::Data => {
-                if !received_first_data {
-                    // Make thread for statistics
-                    received_first_data = true;
-                    thread::spawn(stats_worker);
-                }
                 unsafe {
-                    STATS.last_id = perf_pkt.get_id();
-                    STATS.pkt_count += 1;
-                    STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
+                    STATS.last_id = recv_perf_pkt.get_id();
+                    if STATS.warmup_state == WarmupState::Finished || STATS.warmup_state == WarmupState::None {
+                        STATS.pkt_count += 1;
+                        STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
+                    }
                 }
             }
             PerfOpFieldValues::ReqEnd => {
                 println!("Received ReqEnd");
 
                 unsafe { TEST_RUNNING = false }
-                received_first_data = false;
 
                 let mut perf_buffer = vec![0; 8];
                 let mut eth_buffer = vec![0; 14 + 8];
 
                 let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-                perf_pkt.set_id(perf_pkt.get_id());
+                perf_pkt.set_id(recv_perf_pkt.get_id());
                 perf_pkt.set_op(PerfOpFieldValues::ResEnd);
 
                 let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
-                eth_pkt.set_destination(eth_pkt.get_source());
+                eth_pkt.set_destination(recv_eth_pkt.get_source());
                 eth_pkt.set_source(my_mac);
                 eth_pkt.set_ethertype(EtherType(ETHERTYPE_PERF));
 
@@ -276,7 +299,7 @@ fn do_server(iface_name: String) {
     }
 }
 
-fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
+fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
@@ -295,12 +318,13 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
     // Request start
     println!("Requesting start");
-    let mut req_start_buffer = vec![0; 4];
-    let mut perf_buffer = vec![0; 8 + 4];
-    let mut eth_buffer = vec![0; 14 + 8 + 4];
+    let mut req_start_buffer = vec![0; 8];
+    let mut perf_buffer = vec![0; 8 + 8];
+    let mut eth_buffer = vec![0; 14 + 8 + 8];
 
     let mut perf_req_start_pkt = MutablePerfStartReqPacket::new(&mut req_start_buffer).unwrap();
     perf_req_start_pkt.set_duration(duration.try_into().unwrap());
+    perf_req_start_pkt.set_warmup(warmup.try_into().unwrap());
 
     let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
     perf_pkt.set_id(0xdeadbeef); // TODO: Randomize
@@ -368,7 +392,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize) {
 
         last_id += 1;
 
-        if now.elapsed().as_secs() > duration as u64 || !unsafe { RUNNING } {
+        if now.elapsed().as_secs() > (duration + warmup) as u64 || !unsafe { RUNNING } {
             break;
         }
     }
@@ -435,10 +459,21 @@ fn stats_worker() {
     let mut last_id = 0;
     let mut last_bytes = 0;
     let mut last_packets = 0;
-    let start_time = Instant::now();
-    let mut last_time = start_time;
 
     const SECOND: Duration = Duration::from_secs(1);
+
+    if stats.warmup_state == WarmupState::Ready {
+        stats.warmup_state = WarmupState::WarmingUp;
+        println!("Warming up");
+        thread::sleep(Duration::from_secs(stats.warmup as u64));
+        println!("Finished warmup");
+        stats.warmup_state = WarmupState::Finished;
+    }
+
+    last_id = stats.last_id;
+
+    let start_time = Instant::now();
+    let mut last_time = start_time;
 
     while unsafe { TEST_RUNNING } {
         let elapsed = last_time.elapsed();

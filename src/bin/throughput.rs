@@ -70,13 +70,21 @@ pub struct PerfStartReq {
     payload: Vec<u8>,
 }
 
+#[derive(PartialEq, Eq)]
+enum WarmupState {
+    None = 0,
+    Ready = 1,
+    WarmingUp = 2,
+    Finished = 3,
+}
+
 struct Statistics {
     pkt_count: usize,
     total_bytes: usize,
     last_id: u32,
     duration: usize,
     warmup: usize,
-    warming_up: bool,
+    warmup_state: WarmupState,
 }
 
 static mut STATS: Statistics = Statistics {
@@ -85,7 +93,7 @@ static mut STATS: Statistics = Statistics {
     last_id: 0,
     duration: 0,
     warmup: 0,
-    warming_up: false,
+    warmup_state: WarmupState::None,
 };
 
 unsafe impl Send for Statistics {}
@@ -216,7 +224,7 @@ fn do_server(iface_name: String) {
                     STATS.pkt_count = 0;
                     STATS.total_bytes = 0;
                     STATS.last_id = 0;
-                    STATS.warming_up = if STATS.warmup > 0 { true } else { false };
+                    STATS.warmup_state = if STATS.warmup > 0 { WarmupState::Ready } else { WarmupState::None };
                     TEST_RUNNING = true;
                 }
 
@@ -243,7 +251,7 @@ fn do_server(iface_name: String) {
             PerfOpFieldValues::Data => {
                 unsafe {
                     STATS.last_id = recv_perf_pkt.get_id();
-                    if !STATS.warming_up {
+                    if STATS.warmup_state == WarmupState::Finished || STATS.warmup_state == WarmupState::None {
                         STATS.pkt_count += 1;
                         STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
                     }
@@ -454,11 +462,12 @@ fn stats_worker() {
 
     const SECOND: Duration = Duration::from_secs(1);
 
-    if stats.warming_up {
+    if stats.warmup_state == WarmupState::Ready {
+        stats.warmup_state = WarmupState::WarmingUp;
         println!("Warming up");
         thread::sleep(Duration::from_secs(stats.warmup as u64));
         println!("Finished warmup");
-        stats.warming_up = false;
+        stats.warmup_state = WarmupState::Finished;
     }
 
     last_id = stats.last_id;

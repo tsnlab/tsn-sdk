@@ -353,9 +353,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	dev_set_drvdata(&pdev->dev, xpdev);
 
 	/* Set the TSN register to 0x1 */
-	iowrite32(0x1, xdev->bar[0] + 0x0008);
-	iowrite32(0x800f0000, xdev->bar[0] + 0x610);
-	iowrite32(0x10, xdev->bar[0] + 0x620);
+	iowrite32(TSN_ENABLE, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 
 	/* Allocate the network device */
 	/* TC command requires multiple TX queues */

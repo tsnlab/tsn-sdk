@@ -28,14 +28,22 @@ typedef uint32_t u32
 #define REG_TX_TIMESTAMP4_HIGH 0x01f0
 #define REG_TX_TIMESTAMP4_LOW 0x01f4
 
-#define REG_TX_PACKETS 0x0200
-#define REG_TX_DROP_PACKETS 0x0220
-#define REG_NORMAL_TIMEOUT_COUNT 0x041c
-#define REG_TO_OVERFLOW_POPPED_COUNT 0x0420
-#define REG_TO_OVERFLOW_TIMEOUT_COUNT 0x0424
-
 #define REG_BUFFER_WRITE_STATUS1_HIGH 0x0148  /* 63~40: Reserved, 39~32: Buffer space */
 #define REG_BUFFER_WRITE_STATUS1_LOW 0x014c
+
+#define REG_TOTAL_NEW_ENTRY_CNT_HIGH 0x0120
+#define REG_TOTAL_NEW_ENTRY_CNT_LOW 0x0124
+
+#define REG_TOTAL_VALID_ENTRY_CNT_HIGH 0x0128
+#define REG_TOTAL_VALID_ENTRY_CNT_LOW 0x012c
+
+#define REG_TOTAL_DROP_ENTRY_CNT_HIGH 0x0138
+#define REG_TOTAL_DROP_ENTRY_CNT_LOW 0x013c
+
+#define REG_TSN_SYSTEM_CONTROL_HIGH 0x0290
+#define REG_TSN_SYSTEM_CONTROL_LOW 0x0294
+
+#define TSN_ENABLE 0x1
 
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
@@ -146,19 +154,7 @@ timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev *xdev, int tx_id);
 timestamp_t alinx_read_tx_timestamp(struct pci_dev *pdev, int tx_id);
 u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev);
-
-u64 alinx_get_tx_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_tx_packets(struct pci_dev *pdev);
-u64 alinx_get_tx_drop_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_tx_drop_packets(struct pci_dev *pdev);
-u64 alinx_get_normal_timeout_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_normal_timeout_packets(struct pci_dev *pdev);
-u64 alinx_get_to_overflow_popped_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_to_overflow_popped_packets(struct pci_dev *pdev);
-u64 alinx_get_to_overflow_timeout_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_to_overflow_timeout_packets(struct pci_dev *pdev);
-u64 alinx_get_total_tx_drop_packets_by_xdev(struct xdma_dev *xdev);
-u64 alinx_get_total_tx_drop_packets(struct pci_dev *pdev);
+u32 alinx_get_buffer_available(struct xdma_dev *xdev);
 
 void dump_buffer(unsigned char* buffer, int len);
 

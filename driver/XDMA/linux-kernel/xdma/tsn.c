@@ -81,10 +81,6 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct tsn_config* tsn_config = &xdev->tsn_config;
 	struct xdma_private* priv = netdev_priv(xdev->ndev);
 
-	if (!is_buffer_available(xdev)) {
-		return false;
-	}
-
 	vlan_prio = tsn_get_vlan_prio(tsn_config, skb);
 	tc_id = tsn_get_mqprio_tc(xdev->ndev, vlan_prio);
 	is_gptp = is_gptp_packet(tx_buf->data);
@@ -108,6 +104,10 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
+		if (alinx_get_buffer_available(xdev) == 0) {
+			return false;
+		}
+
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
 			from = tsn_config->qav[tc_id].available_at;
 		}

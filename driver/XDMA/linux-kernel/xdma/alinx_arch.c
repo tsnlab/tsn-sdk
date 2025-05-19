@@ -64,15 +64,6 @@ void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
 	alinx_set_cycle_1s_by_xdev(xdev, cycle_1s);
 }
 
-u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev) {
-        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH);
-}
-
-u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        return alinx_get_buffer_write_status_hi_by_xdev(xdev);
-}
-
 u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev) {
         u32 ret = read32(xdev->bar[0] + REG_CYCLE_1S);
         return ret ? ret : RESERVED_CYCLE;
@@ -103,99 +94,22 @@ timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
 	return alinx_read_tx_timestamp_by_xdev(xdev, tx_id);
 }
 
-static void add_u32_counter(u64* sum, u32 value) {
-        /* Handle overflows of 32-bit counters */
-        u32 diff = value - (u32)*sum;
-        *sum += (u64)diff;
+u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev) {
+        // pr_warn("%u\n",read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH));
+        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH);
 }
 
-u64 alinx_get_tx_packets_by_xdev(struct xdma_dev *xdev) {
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register gets cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TX_PACKETS);
-        priv->total_tx_count += regval;
-
-        return priv->total_tx_count;
-}
-
-u64 alinx_get_tx_packets(struct pci_dev *pdev) {
+u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	return alinx_get_tx_packets_by_xdev(xdev);
+        return alinx_get_buffer_write_status_hi_by_xdev(xdev);
 }
 
-u64 alinx_get_tx_drop_packets_by_xdev(struct xdma_dev *xdev) {
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register gets cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TX_DROP_PACKETS);
-        priv->total_tx_drop_count += regval;
-
-        return priv->total_tx_drop_count;
-}
-
-u64 alinx_get_tx_drop_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	return alinx_get_tx_drop_packets_by_xdev(xdev);
-}
-
-u64 alinx_get_normal_timeout_packets_by_xdev(struct xdma_dev *xdev) {
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_NORMAL_TIMEOUT_COUNT);
-        add_u32_counter(&priv->last_normal_timeout, regval);
-
-        return priv->last_normal_timeout;
-}
-
-u64 alinx_get_normal_timeout_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	return alinx_get_normal_timeout_packets_by_xdev(xdev);
-}
-
-u64 alinx_get_to_overflow_popped_packets_by_xdev(struct xdma_dev *xdev) {
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TO_OVERFLOW_POPPED_COUNT);
-        add_u32_counter(&priv->last_to_overflow_popped, regval);
-
-        return priv->last_to_overflow_popped;
-}
-
-u64 alinx_get_to_overflow_popped_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	return alinx_get_to_overflow_popped_packets_by_xdev(xdev);
-}
-
-u64 alinx_get_to_overflow_timeout_packets_by_xdev(struct xdma_dev *xdev) {
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TO_OVERFLOW_TIMEOUT_COUNT);
-        add_u32_counter(&priv->last_to_overflow_timeout, regval);
-
-        return priv->last_to_overflow_timeout;
-}
-
-u64 alinx_get_to_overflow_timeout_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	return alinx_get_to_overflow_timeout_packets_by_xdev(xdev);
-}
-
-u64 alinx_get_total_tx_drop_packets_by_xdev(struct xdma_dev *xdev) {
-        return alinx_get_tx_drop_packets_by_xdev(xdev)
-                + alinx_get_normal_timeout_packets_by_xdev(xdev)
-                + alinx_get_to_overflow_popped_packets_by_xdev(xdev)
-                + alinx_get_to_overflow_timeout_packets_by_xdev(xdev);
-}
-
-u64 alinx_get_total_tx_drop_packets(struct pci_dev *pdev) {
-        return alinx_get_tx_drop_packets(pdev)
-                + alinx_get_normal_timeout_packets(pdev)
-                + alinx_get_to_overflow_popped_packets(pdev)
-                + alinx_get_to_overflow_timeout_packets(pdev);
+u32 alinx_get_buffer_available(struct xdma_dev *xdev) {
+        u64 new_cnt = read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
+        u64 valid_cnt = read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
+        u64 drop_cnt = read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
+        // pr_err("%llu - %llu - %llu = %u\n", new_cnt, valid_cnt, drop_cnt, (u32)(new_cnt - valid_cnt - drop_cnt));
+        return (u32)HW_QUEUE_SIZE - (u32)(new_cnt - valid_cnt - drop_cnt);
 }
 
 #ifdef __LIBXDMA_DEBUG__

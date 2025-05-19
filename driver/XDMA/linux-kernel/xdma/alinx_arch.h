@@ -126,8 +126,7 @@ struct qav_state {
 };
 
 struct buffer_tracker {
-	uint64_t pending_packets;
-	uint64_t last_tx_count;
+	uint32_t available_space;
 };
 
 struct tsn_config {

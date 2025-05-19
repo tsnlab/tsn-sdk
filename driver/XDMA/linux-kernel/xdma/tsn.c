@@ -24,6 +24,8 @@ static uint64_t bytes_to_ns(uint64_t bytes);
 static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint8_t tc_id, uint64_t bytes);
 static bool get_timestamps(struct timestamps* timestamps, const struct tsn_config* tsn_config, timestamp_t from, uint8_t tc_id, uint64_t bytes, bool consider_delay);
 
+static void tsn_buffer_tracker_update(struct xdma_dev* xdev);
+static void tsn_buffer_tracker_add_packet(struct xdma_dev* xdev);
 static bool is_buffer_available(struct xdma_dev* xdev);
 
 static inline uint8_t tsn_get_mqprio_tc(struct net_device* ndev, uint8_t prio) {
@@ -104,7 +106,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
-		if (alinx_get_buffer_available(xdev) == 0) {
+		if (!is_buffer_available(xdev)) {
 			return false;
 		}
 
@@ -141,6 +143,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_NORMAL;
 	}
 
+	tsn_buffer_tracker_add_packet(xdev);
 	// Update available_ats
 	spend_qav_credit(tsn_config, from, tc_id, metadata->frame_length);
 	tsn_config->queue_available_at[queue_prio] += duration_ns;
@@ -409,8 +412,19 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 	return true;
 }
 
+static void tsn_buffer_tracker_update(struct xdma_dev* xdev) {
+	if (xdev->tsn_config.buffer_tracker.available_space < HW_QUEUE_SIZE_PAD) {
+		xdev->tsn_config.buffer_tracker.available_space = alinx_get_buffer_available(xdev);
+	}
+}
+
+static void tsn_buffer_tracker_add_packet(struct xdma_dev* xdev) {
+	xdev->tsn_config.buffer_tracker.available_space -= 1;
+}
+
 static bool is_buffer_available(struct xdma_dev* xdev) {
-	return alinx_get_buffer_write_status_hi_by_xdev(xdev) > 0;
+	tsn_buffer_tracker_update(xdev);
+	return xdev->tsn_config.buffer_tracker.available_space > 0;
 }
 
 int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload) {

@@ -24,9 +24,7 @@ static uint64_t bytes_to_ns(uint64_t bytes);
 static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint8_t tc_id, uint64_t bytes);
 static bool get_timestamps(struct timestamps* timestamps, const struct tsn_config* tsn_config, timestamp_t from, uint8_t tc_id, uint64_t bytes, bool consider_delay);
 
-// HW Buffer tracker
-static bool append_buffer_track(struct buffer_tracker* buffer_tracker);
-static void update_buffer_track(struct pci_dev* pdev);
+static bool is_buffer_available(struct xdma_dev* xdev);
 
 static inline uint8_t tsn_get_mqprio_tc(struct net_device* ndev, uint8_t prio) {
 	if (netdev_get_num_tc(ndev) == 0) {
@@ -81,10 +79,11 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct tx_metadata* metadata = (struct tx_metadata*)&tx_buf->metadata;
 	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
 	struct tsn_config* tsn_config = &xdev->tsn_config;
-	struct buffer_tracker* buffer_tracker = &tsn_config->buffer_tracker;
 	struct xdma_private* priv = netdev_priv(xdev->ndev);
 
-	update_buffer_track(pdev);
+	if (!is_buffer_available(xdev)) {
+		return false;
+	}
 
 	vlan_prio = tsn_get_vlan_prio(tsn_config, skb);
 	tc_id = tsn_get_mqprio_tc(xdev->ndev, vlan_prio);
@@ -112,16 +111,8 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
 			from = tsn_config->qav[tc_id].available_at;
 		}
-		if (consider_delay) {
-			// Check if queue is available
-			if (buffer_tracker->pending_packets >= TSN_QUEUE_SIZE) {
-				return false;
-			}
-		} else {
+		if (!consider_delay) {
 			// Best effort
-			if (buffer_tracker->pending_packets >= BE_QUEUE_SIZE) {
-				return false;
-			}
 			from = max(from, tsn_config->total_available_at);
 		}
 
@@ -156,11 +147,6 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	tsn_config->total_available_at += duration_ns;
 
 	free_at = max(timestamps.to + duration_ns, tsn_config->total_available_at);
-	if (append_buffer_track(buffer_tracker) == false) {
-		// HW queue is full. Drop the frame
-		// Mostly, this won't happen because we already checked the queue size
-		return false;
-	}
 
 	return true;
 }
@@ -423,30 +409,8 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 	return true;
 }
 
-static bool append_buffer_track(struct buffer_tracker* buffer_tracker) {
-	if (buffer_tracker->pending_packets >= HW_QUEUE_SIZE) {
-		return false;
-	}
-
-	buffer_tracker->pending_packets += 1;
-	return true;
-}
-
-static void update_buffer_track(struct pci_dev* pdev) {
-	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-	struct buffer_tracker* buffer_tracker = &xdev->tsn_config.buffer_tracker;
-	u64 tx_count, pop_count;
-
-	if (buffer_tracker->pending_packets < HW_QUEUE_SIZE - HW_QUEUE_SIZE_PAD) {
-		// No need to update that frequently
-		return;
-	}
-
-	tx_count = alinx_get_tx_packets_by_xdev(xdev) + alinx_get_total_tx_drop_packets_by_xdev(xdev);
-	pop_count = tx_count - buffer_tracker->last_tx_count;
-	buffer_tracker->last_tx_count = tx_count;
-	pop_count = min(pop_count, buffer_tracker->pending_packets);
-	buffer_tracker->pending_packets -= pop_count;
+static bool is_buffer_available(struct xdma_dev* xdev) {
+	return alinx_get_buffer_write_status_hi_by_xdev(xdev) > 0;
 }
 
 int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload) {

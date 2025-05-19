@@ -13,27 +13,29 @@ typedef uint32_t u32
 #include <linux/ptp_clock_kernel.h>
 #include <net/pkt_sched.h>
 
-#define REG_NEXT_PULSE_AT_HI 0x002c
-#define REG_NEXT_PULSE_AT_LO 0x0030
-#define REG_CYCLE_1S 0x0034
-#define REG_SYS_CLOCK_HI 0x0380
-#define REG_SYS_CLOCK_LO 0x0384
+#define REG_NEXT_PULSE_AT_HI 0x002c  /* These are not updated yet */
+#define REG_NEXT_PULSE_AT_LO 0x0030  /* These are not updated yet */
+#define REG_CYCLE_1S 0x0034          /* These are not updated yet */
+#define REG_SYS_CLOCK_HI 0x0288
+#define REG_SYS_CLOCK_LO 0x028c
 
-#define REG_TX_TIMESTAMP_COUNT 0x0300
-#define REG_TX_TIMESTAMP1_HIGH 0x0310
-#define REG_TX_TIMESTAMP1_LOW 0x0314
-#define REG_TX_TIMESTAMP2_HIGH 0x0320
-#define REG_TX_TIMESTAMP2_LOW 0x0324
-#define REG_TX_TIMESTAMP3_HIGH 0x0330
-#define REG_TX_TIMESTAMP3_LOW 0x0334
-#define REG_TX_TIMESTAMP4_HIGH 0x0340
-#define REG_TX_TIMESTAMP4_LOW 0x0344
+#define REG_TX_TIMESTAMP1_HIGH 0x01d8
+#define REG_TX_TIMESTAMP1_LOW 0x01dc
+#define REG_TX_TIMESTAMP2_HIGH 0x01e0
+#define REG_TX_TIMESTAMP2_LOW 0x01e4
+#define REG_TX_TIMESTAMP3_HIGH 0x01e8
+#define REG_TX_TIMESTAMP3_LOW 0x01ec
+#define REG_TX_TIMESTAMP4_HIGH 0x01f0
+#define REG_TX_TIMESTAMP4_LOW 0x01f4
 
 #define REG_TX_PACKETS 0x0200
 #define REG_TX_DROP_PACKETS 0x0220
 #define REG_NORMAL_TIMEOUT_COUNT 0x041c
 #define REG_TO_OVERFLOW_POPPED_COUNT 0x0420
 #define REG_TO_OVERFLOW_TIMEOUT_COUNT 0x0424
+
+#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0148  /* 63~40: Reserved, 39~32: Buffer space */
+#define REG_BUFFER_WRITE_STATUS1_LOW 0x014c
 
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
@@ -142,6 +144,9 @@ u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_cycle_1s(struct pci_dev *pdev);
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev *xdev, int tx_id);
 timestamp_t alinx_read_tx_timestamp(struct pci_dev *pdev, int tx_id);
+u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev);
+u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev);
+
 u64 alinx_get_tx_packets_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_tx_packets(struct pci_dev *pdev);
 u64 alinx_get_tx_drop_packets_by_xdev(struct xdma_dev *xdev);

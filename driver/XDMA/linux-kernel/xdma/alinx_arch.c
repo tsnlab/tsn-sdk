@@ -64,6 +64,15 @@ void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
 	alinx_set_cycle_1s_by_xdev(xdev, cycle_1s);
 }
 
+u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev) {
+        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH);
+}
+
+u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev) {
+        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+        return alinx_get_buffer_write_status_hi_by_xdev(xdev);
+}
+
 u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev) {
         u32 ret = read32(xdev->bar[0] + REG_CYCLE_1S);
         return ret ? ret : RESERVED_CYCLE;

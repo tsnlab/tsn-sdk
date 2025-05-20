@@ -105,12 +105,8 @@ struct tx_buffer {
 } __attribute__((packed, scalar_storage_order("big-endian")));
 
 struct rx_metadata {
-    uint8_t flags;
     uint64_t timestamp;
-    uint8_t reserved;
     uint16_t frame_length;
-    uint16_t vlan_tag;
-    uint32_t checksum;
 } __attribute__((packed, scalar_storage_order("big-endian")));
 
 struct rx_buffer {

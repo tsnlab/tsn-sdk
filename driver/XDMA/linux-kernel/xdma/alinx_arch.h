@@ -28,8 +28,8 @@ typedef uint32_t u32
 #define REG_TX_TIMESTAMP4_HIGH 0x01f0
 #define REG_TX_TIMESTAMP4_LOW 0x01f4
 
-#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0148  /* 63~40: Reserved, 39~32: Buffer space */
-#define REG_BUFFER_WRITE_STATUS1_LOW 0x014c
+#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0160
+#define REG_BUFFER_WRITE_STATUS1_LOW 0x0164
 
 #define REG_TOTAL_NEW_ENTRY_CNT_HIGH 0x0120
 #define REG_TOTAL_NEW_ENTRY_CNT_LOW 0x0124
@@ -42,6 +42,8 @@ typedef uint32_t u32
 
 #define REG_TSN_SYSTEM_CONTROL_HIGH 0x0290
 #define REG_TSN_SYSTEM_CONTROL_LOW 0x0294
+
+#define FIFO_DATA_CNT_MASK 0x00ff
 
 #define TSN_ENABLE 0x1
 
@@ -153,7 +155,8 @@ timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev *xdev, int tx_id);
 timestamp_t alinx_read_tx_timestamp(struct pci_dev *pdev, int tx_id);
 u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev);
-u32 alinx_get_buffer_available(struct xdma_dev *xdev);
+u32 alinx_get_buffer_write_status_lo_by_xdev(struct xdma_dev *xdev);
+u32 alinx_get_buffer_write_status_lo(struct pci_dev *pdev);
 
 void dump_buffer(unsigned char* buffer, int len);
 

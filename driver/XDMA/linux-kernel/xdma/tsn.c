@@ -414,7 +414,10 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 
 static void tsn_buffer_tracker_update(struct xdma_dev* xdev) {
 	if (xdev->tsn_config.buffer_tracker.available_space < HW_QUEUE_SIZE_PAD) {
-		xdev->tsn_config.buffer_tracker.available_space = alinx_get_buffer_available(xdev);
+		u32 write_status_hi = alinx_get_buffer_write_status_hi_by_xdev(xdev);
+		u32 write_status_lo = alinx_get_buffer_write_status_lo_by_xdev(xdev);
+		(void)write_status_hi;  /* The value of hi is not neccessary, but we need to read the whole 64-bit register */
+		xdev->tsn_config.buffer_tracker.available_space = write_status_lo;
 	}
 }
 

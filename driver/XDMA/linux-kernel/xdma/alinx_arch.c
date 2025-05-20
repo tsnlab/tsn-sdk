@@ -95,7 +95,6 @@ timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
 }
 
 u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev) {
-        // pr_warn("%u\n",read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH));
         return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH);
 }
 
@@ -104,12 +103,13 @@ u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev) {
         return alinx_get_buffer_write_status_hi_by_xdev(xdev);
 }
 
-u32 alinx_get_buffer_available(struct xdma_dev *xdev) {
-        u64 new_cnt = read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
-        u64 valid_cnt = read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
-        u64 drop_cnt = read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
-        // pr_err("%llu - %llu - %llu = %u\n", new_cnt, valid_cnt, drop_cnt, (u32)(new_cnt - valid_cnt - drop_cnt));
-        return (u32)HW_QUEUE_SIZE - (u32)(new_cnt - valid_cnt - drop_cnt);
+u32 alinx_get_buffer_write_status_lo_by_xdev(struct xdma_dev *xdev) {
+        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
+}
+
+u32 alinx_get_buffer_write_status_lo(struct pci_dev *pdev) {
+        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+        return alinx_get_buffer_write_status_lo_by_xdev(xdev);
 }
 
 #ifdef __LIBXDMA_DEBUG__

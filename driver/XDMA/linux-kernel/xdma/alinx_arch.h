@@ -57,7 +57,7 @@ typedef uint32_t u32
 #define HW_QUEUE_SIZE (128)
 #define BE_QUEUE_SIZE (HW_QUEUE_SIZE - 20)
 #define TSN_QUEUE_SIZE (HW_QUEUE_SIZE - 2)
-#define HW_QUEUE_SIZE_PAD 20
+#define HW_QUEUE_SIZE_PAD 10
 
 #define TC_COUNT 8
 #define TSN_PRIO_COUNT 8
@@ -157,6 +157,9 @@ u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev);
 u32 alinx_get_buffer_write_status_lo_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_buffer_write_status_lo(struct pci_dev *pdev);
+u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev);
 
 void dump_buffer(unsigned char* buffer, int len);
 

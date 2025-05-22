@@ -100,15 +100,16 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 	duration_ns = bytes_to_ns(metadata->frame_length);
 
+	if (!is_buffer_available(xdev)) {
+		return false;
+	}
+
 	if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
 		timestamps.from = tsn_config->total_available_at;
 		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
-		if (!is_buffer_available(xdev)) {
-			return false;
-		}
 
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
 			from = tsn_config->qav[tc_id].available_at;
@@ -413,11 +414,11 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 }
 
 static void tsn_buffer_tracker_update(struct xdma_dev* xdev) {
-	if (xdev->tsn_config.buffer_tracker.available_space < HW_QUEUE_SIZE_PAD) {
-		u32 write_status_hi = alinx_get_buffer_write_status_hi_by_xdev(xdev);
-		u32 write_status_lo = alinx_get_buffer_write_status_lo_by_xdev(xdev);
-		(void)write_status_hi;  /* The value of hi is not neccessary, but we need to read the whole 64-bit register */
-		xdev->tsn_config.buffer_tracker.available_space = write_status_lo;
+	if (xdev->tsn_config.buffer_tracker.available_space < 20) {
+		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
+		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
+		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
+		xdev->tsn_config.buffer_tracker.available_space = HW_QUEUE_SIZE - (u32)(total_pkts - sent_pkts - dropped_pkts);
 	}
 }
 

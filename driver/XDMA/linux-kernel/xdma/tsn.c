@@ -26,7 +26,7 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 
 static void tsn_buffer_tracker_update(struct xdma_dev* xdev);
 static void tsn_buffer_tracker_add_packet(struct xdma_dev* xdev);
-static bool is_buffer_available(struct xdma_dev* xdev);
+static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space);
 
 static inline uint8_t tsn_get_mqprio_tc(struct net_device* ndev, uint8_t prio) {
 	if (netdev_get_num_tc(ndev) == 0) {
@@ -100,22 +100,25 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 	duration_ns = bytes_to_ns(metadata->frame_length);
 
-	if (!is_buffer_available(xdev)) {
-		return false;
-	}
-
 	if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
 		timestamps.from = tsn_config->total_available_at;
 		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
-
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
 			from = tsn_config->qav[tc_id].available_at;
 		}
-		if (!consider_delay) {
+
+		if (consider_delay) {
+			if (!is_buffer_available(xdev, TSN_QUEUE_SIZE_PAD)) {
+				return false;
+			}
+		} else {
 			// Best effort
+			if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
+				return false;
+			}
 			from = max(from, tsn_config->total_available_at);
 		}
 
@@ -414,7 +417,7 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 }
 
 static void tsn_buffer_tracker_update(struct xdma_dev* xdev) {
-	if (xdev->tsn_config.buffer_tracker.available_space < 20) {
+	if (xdev->tsn_config.buffer_tracker.available_space < HW_QUEUE_SIZE_PAD) {
 		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
 		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
 		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
@@ -426,9 +429,9 @@ static void tsn_buffer_tracker_add_packet(struct xdma_dev* xdev) {
 	xdev->tsn_config.buffer_tracker.available_space -= 1;
 }
 
-static bool is_buffer_available(struct xdma_dev* xdev) {
+static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space) {
 	tsn_buffer_tracker_update(xdev);
-	return xdev->tsn_config.buffer_tracker.available_space > 0;
+	return xdev->tsn_config.buffer_tracker.available_space > min_space;
 }
 
 int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload) {

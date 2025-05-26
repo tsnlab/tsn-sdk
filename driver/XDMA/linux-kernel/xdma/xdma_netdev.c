@@ -143,7 +143,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         /* Jumbo frames not supported */
         if (skb->len > XDMA_BUFFER_SIZE) {
+#ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
+#endif
                 netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;

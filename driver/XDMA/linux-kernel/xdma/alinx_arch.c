@@ -113,15 +113,15 @@ u32 alinx_get_buffer_write_status_lo(struct pci_dev *pdev) {
 }
 
 u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev) {
-        return (read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) << 32) | read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
 }
 
 u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev) {
-        return (read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) << 32) | read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
 }
 
 u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev) {
-        return (read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) + read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW));
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
 }
 
 #ifdef __LIBXDMA_DEBUG__

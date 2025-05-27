@@ -24,12 +24,12 @@ static void set_pulse_at(struct ptp_device_data *ptp_data, sysclock_t sys_count)
         xdma_debug("ptp%u: %s sys_count=%llu, current_ns=%llu, next_pulse_ns=%llu, next_pulse_sysclock=%llu",
                    ptp_data->ptp_id, __func__, sys_count, current_ns, next_pulse_ns, next_pulse_sysclock);
 
-        alinx_set_pulse_at(xdev->pdev, next_pulse_sysclock);
+        alinx_set_pulse_at_by_xdev(xdev, next_pulse_sysclock);
 }
 
 static void set_cycle_1s(struct ptp_device_data *ptp_data, u32 cycle_1s) {
         xdma_debug("ptp%u: %s cycle_1s=%u", ptp_data->ptp_id, __func__, cycle_1s);
-        alinx_set_cycle_1s(ptp_data->xdev->pdev, cycle_1s);
+        alinx_set_cycle_1s_by_xdev(ptp_data->xdev, cycle_1s);
 }
 
 static void set_ticks_scale(struct ptp_device_data *ptp_data, double ticks_scale) {
@@ -95,7 +95,7 @@ static int alinx_ptp_gettimex(struct ptp_clock_info *ptp, struct timespec64 *ts,
         spin_lock_irqsave(&ptp_data->lock, flags);
 
         ptp_read_system_prets(sts);
-        clock = alinx_get_sys_clock(ptp_data->xdev->pdev);
+        clock = alinx_get_sys_clock_by_xdev(ptp_data->xdev);
         ptp_read_system_postts(sts);
 
         timestamp = alinx_get_timestamp(clock, ptp_data->ticks_scale, ptp_data->offset);
@@ -129,13 +129,13 @@ static int alinx_ptp_settime(struct ptp_clock_info *ptp, const struct timespec64
 
         ptp_data->ticks_scale = TICKS_SCALE;
 
-        sys_clock = alinx_get_sys_clock(xdev->pdev);
+        sys_clock = alinx_get_sys_clock_by_xdev(xdev);
         hw_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale, ptp_data->offset);
 
         ptp_data->offset = host_timestamp - hw_timestamp;
 
-        set_cycle_1s(ptp_data, RESERVED_CYCLE);
-        set_pulse_at(ptp_data, sys_clock);
+        // set_cycle_1s(ptp_data, RESERVED_CYCLE);
+        // set_pulse_at(ptp_data, sys_clock);
 
         spin_unlock_irqrestore(&ptp_data->lock, flags);
 
@@ -161,8 +161,8 @@ static int alinx_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
         ptp_data->offset += delta;
 
         /* Set pulse_at */
-        sys_clock = alinx_get_sys_clock(ptp_data->xdev->pdev);
-        set_pulse_at(ptp_data, sys_clock);
+        sys_clock = alinx_get_sys_clock_by_xdev(ptp_data->xdev);
+        // set_pulse_at(ptp_data, sys_clock);
 
         spin_unlock_irqrestore(&ptp_data->lock, flags);
 
@@ -187,7 +187,7 @@ static int alinx_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 
         spin_lock_irqsave(&ptp_data->lock, flags);
 
-        sys_clock = alinx_get_sys_clock(xdev->pdev);
+        sys_clock = alinx_get_sys_clock_by_xdev(xdev);
 
         if (scaled_ppm == 0) {
                 goto exit;
@@ -209,11 +209,11 @@ static int alinx_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
         ptp_data->offset += (cur_timestamp - new_timestamp);
 
         /* Adjust cycle_1s */
-        set_ticks_scale(ptp_data, ptp_data->ticks_scale);
+        // set_ticks_scale(ptp_data, ptp_data->ticks_scale);
 
         /* Set pulse_at */
-        sys_clock = alinx_get_sys_clock(xdev->pdev);
-        set_pulse_at(ptp_data, sys_clock);
+        sys_clock = alinx_get_sys_clock_by_xdev(xdev);
+        // set_pulse_at(ptp_data, sys_clock);
 
         xdma_debug("ptp%u: %s scaled_ppm=%ld, offset=%llu, ticks_scale:%lf",
                    ptp_data->ptp_id, __func__, scaled_ppm, ptp_data->offset, ptp_data->ticks_scale);

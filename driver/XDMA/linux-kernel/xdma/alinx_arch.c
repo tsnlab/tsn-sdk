@@ -32,14 +32,17 @@ void write32(u32 val, void * addr) {
 
 #endif
 
-void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time) {
         write32((u32)(time >> 32), xdev->bar[0] + REG_NEXT_PULSE_AT_HI);
         write32((u32)time, xdev->bar[0] + REG_NEXT_PULSE_AT_LO);
 }
 
-sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
+void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	alinx_set_pulse_at_by_xdev(xdev, time);
+}
+
+sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
         timestamp_t clock;
         clock = ((u64)read32(xdev->bar[0] + REG_SYS_CLOCK_HI) << 32) |
                 read32(xdev->bar[0] + REG_SYS_CLOCK_LO);
@@ -47,20 +50,31 @@ sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
         return clock;
 }
 
-void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
+sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+        return alinx_get_sys_clock_by_xdev(xdev);
+}
+
+void alinx_set_cycle_1s_by_xdev(struct xdma_dev *xdev, u32 cycle_1s) {
         write32(cycle_1s, xdev->bar[0] + REG_CYCLE_1S);
 }
 
-u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
+void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	alinx_set_cycle_1s_by_xdev(xdev, cycle_1s);
+}
+
+u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev) {
         u32 ret = read32(xdev->bar[0] + REG_CYCLE_1S);
         return ret ? ret : RESERVED_CYCLE;
 }
 
-timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
+u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	return alinx_get_cycle_1s_by_xdev(xdev);
+}
 
+timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
                 return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP1_LOW));
@@ -75,72 +89,30 @@ timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
         }
 }
 
-static void add_u32_counter(u64* sum, u32 value) {
-        /* Handle overflows of 32-bit counters */
-        u32 diff = value - (u32)*sum;
-        *sum += (u64)diff;
-}
-
-u64 alinx_get_tx_packets(struct pci_dev *pdev) {
+timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register gets cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TX_PACKETS);
-        priv->total_tx_count += regval;
-
-        return priv->total_tx_count;
+	return alinx_read_tx_timestamp_by_xdev(xdev, tx_id);
 }
 
-u64 alinx_get_tx_drop_packets(struct pci_dev *pdev) {
+u64 alinx_get_buffer_write_status_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
+}
+
+u64 alinx_get_buffer_write_status(struct pci_dev *pdev) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register gets cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TX_DROP_PACKETS);
-        priv->total_tx_drop_count += regval;
-
-        return priv->total_tx_drop_count;
+        return alinx_get_buffer_write_status_by_xdev(xdev);
 }
 
-u64 alinx_get_normal_timeout_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_NORMAL_TIMEOUT_COUNT);
-        add_u32_counter(&priv->last_normal_timeout, regval);
-
-        return priv->last_normal_timeout;
+u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
 }
 
-u64 alinx_get_to_overflow_popped_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TO_OVERFLOW_POPPED_COUNT);
-        add_u32_counter(&priv->last_to_overflow_popped, regval);
-
-        return priv->last_to_overflow_popped;
+u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
 }
 
-u64 alinx_get_to_overflow_timeout_packets(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        struct xdma_private* priv = netdev_priv(xdev->ndev);
-
-        /* This register does not get cleared after read */
-        u32 regval = read32(xdev->bar[0] + REG_TO_OVERFLOW_TIMEOUT_COUNT);
-        add_u32_counter(&priv->last_to_overflow_timeout, regval);
-
-        return priv->last_to_overflow_timeout;
-}
-
-u64 alinx_get_total_tx_drop_packets(struct pci_dev *pdev) {
-        return alinx_get_tx_drop_packets(pdev)
-                + alinx_get_normal_timeout_packets(pdev)
-                + alinx_get_to_overflow_popped_packets(pdev)
-                + alinx_get_to_overflow_timeout_packets(pdev);
+u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
 }
 
 #ifdef __LIBXDMA_DEBUG__

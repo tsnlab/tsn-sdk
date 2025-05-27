@@ -13,27 +13,39 @@ typedef uint32_t u32
 #include <linux/ptp_clock_kernel.h>
 #include <net/pkt_sched.h>
 
-#define REG_NEXT_PULSE_AT_HI 0x002c
-#define REG_NEXT_PULSE_AT_LO 0x0030
-#define REG_CYCLE_1S 0x0034
-#define REG_SYS_CLOCK_HI 0x0380
-#define REG_SYS_CLOCK_LO 0x0384
+#define REG_NEXT_PULSE_AT_HI 0x002c  /* These are not updated yet */
+#define REG_NEXT_PULSE_AT_LO 0x0030  /* These are not updated yet */
+#define REG_CYCLE_1S 0x0034          /* These are not updated yet */
+#define REG_SYS_CLOCK_HI 0x0288
+#define REG_SYS_CLOCK_LO 0x028c
 
-#define REG_TX_TIMESTAMP_COUNT 0x0300
-#define REG_TX_TIMESTAMP1_HIGH 0x0310
-#define REG_TX_TIMESTAMP1_LOW 0x0314
-#define REG_TX_TIMESTAMP2_HIGH 0x0320
-#define REG_TX_TIMESTAMP2_LOW 0x0324
-#define REG_TX_TIMESTAMP3_HIGH 0x0330
-#define REG_TX_TIMESTAMP3_LOW 0x0334
-#define REG_TX_TIMESTAMP4_HIGH 0x0340
-#define REG_TX_TIMESTAMP4_LOW 0x0344
+#define REG_TX_TIMESTAMP1_HIGH 0x01d8
+#define REG_TX_TIMESTAMP1_LOW 0x01dc
+#define REG_TX_TIMESTAMP2_HIGH 0x01e0
+#define REG_TX_TIMESTAMP2_LOW 0x01e4
+#define REG_TX_TIMESTAMP3_HIGH 0x01e8
+#define REG_TX_TIMESTAMP3_LOW 0x01ec
+#define REG_TX_TIMESTAMP4_HIGH 0x01f0
+#define REG_TX_TIMESTAMP4_LOW 0x01f4
 
-#define REG_TX_PACKETS 0x0200
-#define REG_TX_DROP_PACKETS 0x0220
-#define REG_NORMAL_TIMEOUT_COUNT 0x041c
-#define REG_TO_OVERFLOW_POPPED_COUNT 0x0420
-#define REG_TO_OVERFLOW_TIMEOUT_COUNT 0x0424
+#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0160
+#define REG_BUFFER_WRITE_STATUS1_LOW 0x0164
+
+#define REG_TOTAL_NEW_ENTRY_CNT_HIGH 0x0120
+#define REG_TOTAL_NEW_ENTRY_CNT_LOW 0x0124
+
+#define REG_TOTAL_VALID_ENTRY_CNT_HIGH 0x0128
+#define REG_TOTAL_VALID_ENTRY_CNT_LOW 0x012c
+
+#define REG_TOTAL_DROP_ENTRY_CNT_HIGH 0x0138
+#define REG_TOTAL_DROP_ENTRY_CNT_LOW 0x013c
+
+#define REG_TSN_SYSTEM_CONTROL_HIGH 0x0290
+#define REG_TSN_SYSTEM_CONTROL_LOW 0x0294
+
+#define FIFO_DATA_CNT_MASK 0x00ff
+
+#define TSN_ENABLE 0x1
 
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
@@ -42,10 +54,14 @@ typedef uint32_t u32
 #define TICKS_SCALE 8.0
 #define RESERVED_CYCLE 125000000
 
-#define HW_QUEUE_SIZE (128)
-#define BE_QUEUE_SIZE (HW_QUEUE_SIZE - 20)
-#define TSN_QUEUE_SIZE (HW_QUEUE_SIZE - 2)
 #define HW_QUEUE_SIZE_PAD 20
+#define HW_QUEUE_SIZE 128
+
+#define BE_QUEUE_SIZE_PAD 20
+#define BE_QUEUE_SIZE (HW_QUEUE_SIZE - BE_QUEUE_SIZE_PAD)
+
+#define TSN_QUEUE_SIZE_PAD 2
+#define TSN_QUEUE_SIZE (HW_QUEUE_SIZE - TSN_QUEUE_SIZE_PAD)
 
 #define TC_COUNT 8
 #define TSN_PRIO_COUNT 8
@@ -115,16 +131,11 @@ struct qav_state {
 	timestamp_t available_at;
 };
 
-struct buffer_tracker {
-	uint64_t pending_packets;
-	uint64_t last_tx_count;
-};
-
 struct tsn_config {
 	struct qbv_config qbv;
 	struct qbv_baked_config qbv_baked;
 	struct qav_state qav[TC_COUNT];
-	struct buffer_tracker buffer_tracker;
+	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
 };
@@ -132,17 +143,21 @@ struct tsn_config {
 u32 read32(void * addr);
 void write32(u32 val, void * addr);
 
+void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time);
 void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time);
+sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *pdev);
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev);
+void alinx_set_cycle_1s_by_xdev(struct xdma_dev *xdev, u32 cycle_1s);
 void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s);
+u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev);
 u32 alinx_get_cycle_1s(struct pci_dev *pdev);
+timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev *xdev, int tx_id);
 timestamp_t alinx_read_tx_timestamp(struct pci_dev *pdev, int tx_id);
-u64 alinx_get_tx_packets(struct pci_dev *pdev);
-u64 alinx_get_tx_drop_packets(struct pci_dev *pdev);
-u64 alinx_get_normal_timeout_packets(struct pci_dev *pdev);
-u64 alinx_get_to_overflow_popped_packets(struct pci_dev *pdev);
-u64 alinx_get_to_overflow_timeout_packets(struct pci_dev *pdev);
-u64 alinx_get_total_tx_drop_packets(struct pci_dev *pdev);
+u64 alinx_get_buffer_write_status_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_buffer_write_status(struct pci_dev *pdev);
+u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev);
 
 void dump_buffer(unsigned char* buffer, int len);
 

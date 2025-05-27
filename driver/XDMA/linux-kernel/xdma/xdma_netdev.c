@@ -143,7 +143,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         /* Jumbo frames not supported */
         if (skb->len > XDMA_BUFFER_SIZE) {
+#ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
+#endif
                 netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
@@ -167,7 +169,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         tx_metadata = (struct tx_metadata*)&tx_buffer->metadata;
         tx_metadata->frame_length = frame_length;
 
-        sys_count = alinx_get_sys_clock(priv->pdev);
+        sys_count = alinx_get_sys_clock_by_xdev(xdev);
         now = alinx_sysclock_to_timestamp(priv->pdev, sys_count);
         sys_count_lower = sys_count & LOWER_29_BITS;
         sys_count_upper = sys_count & ~LOWER_29_BITS;
@@ -304,7 +306,7 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         struct skb_shared_hwtstamps shhwtstamps;
         struct xdma_private* priv = container_of(work - tstamp_id, struct xdma_private, tx_work[0]);
         struct sk_buff* skb = priv->tx_work_skb[tstamp_id];
-        sysclock_t now = alinx_get_sys_clock(priv->xdev->pdev);
+        sysclock_t now = alinx_get_sys_clock_by_xdev(priv->xdev);
 
         if (tstamp_id >= TSN_TIMESTAMP_ID_MAX) {
                 pr_err("Invalid timestamp ID\n");
@@ -323,9 +325,9 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
          * the work thread might try to read TX timestamp
          * before the register gets updated
          */
-        tx_tstamp = alinx_read_tx_timestamp(priv->pdev, tstamp_id);
+        tx_tstamp = alinx_read_tx_timestamp_by_xdev(priv->xdev, tstamp_id);
         if (tx_tstamp == priv->last_tx_tstamp[tstamp_id]) {
-                if (alinx_get_sys_clock(priv->xdev->pdev) < priv->tx_work_wait_until[tstamp_id]) {
+                if (alinx_get_sys_clock_by_xdev(priv->xdev) < priv->tx_work_wait_until[tstamp_id]) {
                         /* The packet might have not been sent yet */
                         goto retry;
                 }

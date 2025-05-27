@@ -94,22 +94,13 @@ timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
 	return alinx_read_tx_timestamp_by_xdev(xdev, tx_id);
 }
 
-u32 alinx_get_buffer_write_status_hi_by_xdev(struct xdma_dev *xdev) {
-        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH);
+u64 alinx_get_buffer_write_status_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
 }
 
-u32 alinx_get_buffer_write_status_hi(struct pci_dev *pdev) {
+u64 alinx_get_buffer_write_status(struct pci_dev *pdev) {
         struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        return alinx_get_buffer_write_status_hi_by_xdev(xdev);
-}
-
-u32 alinx_get_buffer_write_status_lo_by_xdev(struct xdma_dev *xdev) {
-        return read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
-}
-
-u32 alinx_get_buffer_write_status_lo(struct pci_dev *pdev) {
-        struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
-        return alinx_get_buffer_write_status_lo_by_xdev(xdev);
+        return alinx_get_buffer_write_status_by_xdev(xdev);
 }
 
 u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev) {

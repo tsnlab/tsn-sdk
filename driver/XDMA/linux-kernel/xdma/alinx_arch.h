@@ -131,15 +131,11 @@ struct qav_state {
 	timestamp_t available_at;
 };
 
-struct buffer_tracker {
-	uint32_t available_space;
-};
-
 struct tsn_config {
 	struct qbv_config qbv;
 	struct qbv_baked_config qbv_baked;
 	struct qav_state qav[TC_COUNT];
-	struct buffer_tracker buffer_tracker;
+	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
 };

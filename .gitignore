@@ -2,3 +2,12 @@ build/
 
 # rust
 target/
+
+# driver
+*.cmd
+*.ko
+*.mod
+*.mod.c
+*.o
+Module.symvers
+modules.order

@@ -100,7 +100,13 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 	duration_ns = bytes_to_ns(metadata->frame_length);
 
-	if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
+	if (is_gptp) {
+		timestamps.from = now;
+		timestamps.to = TSN_ALWAYS_OPEN(now);
+		timestamps.delay_from = now;
+		timestamps.delay_to = TSN_ALWAYS_OPEN(now);
+		metadata->fail_policy = TSN_FAIL_POLICY_RETRY;
+	} else if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
 		timestamps.from = tsn_config->total_available_at;
 		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;

@@ -101,15 +101,19 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	duration_ns = bytes_to_ns(metadata->frame_length);
 
 	if (is_gptp) {
-		timestamps.from = now;
-		timestamps.to = TSN_ALWAYS_OPEN(now);
-		timestamps.delay_from = now;
-		timestamps.delay_to = TSN_ALWAYS_OPEN(now);
+		timestamps.from = from;
+		timestamps.to = TSN_ALWAYS_OPEN(from);
+		timestamps.delay_from = from;
+		timestamps.delay_to = TSN_ALWAYS_OPEN(from);
 		metadata->fail_policy = TSN_FAIL_POLICY_RETRY;
 	} else if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
-		timestamps.from = tsn_config->total_available_at;
-		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
+		// timestamps.from = tsn_config->total_available_at;
+		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
+		timestamps.from = from;
+		timestamps.to = TSN_ALWAYS_OPEN(from);
+		timestamps.delay_from = from;
+		timestamps.delay_to = TSN_ALWAYS_OPEN(from);
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
@@ -197,25 +201,25 @@ static void bake_qos_config(struct tsn_config* config) {
 	int slot_id, tc_id; // Iterators
 	bool qav_disabled = true;
 	struct qbv_baked_config* baked;
-	if (config->qbv.enabled == false) {
-		// TODO: remove this when throughput issue without QoS gets resolved
-		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-			if (config->qav[tc_id].enabled) {
-				qav_disabled = false;
-				break;
-			}
-		}
+	// if (config->qbv.enabled == false) {
+	// 	// TODO: remove this when throughput issue without QoS gets resolved
+	// 	for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 		if (config->qav[tc_id].enabled) {
+	// 			qav_disabled = false;
+	// 			break;
+	// 		}
+	// 	}
 
-		if (qav_disabled) {
-			config->qbv.enabled = true;
-			config->qbv.start = 0;
-			config->qbv.slot_count = 1;
-			config->qbv.slots[0].duration_ns = 1000000000; // 1s
-			for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-				config->qbv.slots[0].opened_prios[tc_id] = true;
-			}
-		}
-	}
+	// 	if (qav_disabled) {
+	// 		config->qbv.enabled = true;
+	// 		config->qbv.start = 0;
+	// 		config->qbv.slot_count = 1;
+	// 		config->qbv.slots[0].duration_ns = 1000000000; // 1s
+	// 		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 			config->qbv.slots[0].opened_prios[tc_id] = true;
+	// 		}
+	// 	}
+	// }
 
 	baked = &config->qbv_baked;
 	memset(baked, 0, sizeof(struct qbv_baked_config));

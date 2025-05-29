@@ -13,9 +13,10 @@ typedef uint32_t u32
 #include <linux/ptp_clock_kernel.h>
 #include <net/pkt_sched.h>
 
-#define REG_NEXT_PULSE_AT_HI 0x002c  /* These are not updated yet */
-#define REG_NEXT_PULSE_AT_LO 0x0030  /* These are not updated yet */
-#define REG_CYCLE_1S 0x0034          /* These are not updated yet */
+#define REG_NEXT_PULSE_AT_HI 0x02a8
+#define REG_NEXT_PULSE_AT_LO 0x02ac
+#define REG_CYCLE_1S_HI 0x02b0
+#define REG_CYCLE_1S_LO 0x02b4
 #define REG_SYS_CLOCK_HI 0x0288
 #define REG_SYS_CLOCK_LO 0x028c
 

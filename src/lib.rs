@@ -497,11 +497,11 @@ pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
                 continue;
             }
         }
-        if libc::SO_TIMESTAMPNS == cmsg_type {
+        if libc::SO_TIMESTAMPING == cmsg_type {
             unsafe {
                 libc::memcpy(
                     &mut tend as *mut _ as *mut libc::c_void,
-                    libc::CMSG_DATA(cmsg) as *const libc::c_void,
+                    libc::CMSG_DATA(cmsg).add(size_of::<libc::timespec>() * 2) as *const libc::c_void,
                     mem::size_of_val(&tend),
                 );
             }

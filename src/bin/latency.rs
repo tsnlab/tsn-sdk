@@ -189,7 +189,7 @@ fn do_server(iface_name: String) {
         iov_base: packet.as_mut_ptr() as *mut libc::c_void,
         iov_len: packet.len(),
     };
-    match sock.enable_rx_timestamp(&mut iov) {
+    match sock.enable_timestamps(Some(&mut iov)) {
         Ok(()) => {
             eprintln!("Socket RX timestamp enabled");
         }
@@ -280,15 +280,6 @@ fn do_client(args: ClientArgs) {
             }
         }
     });
-    let is_tx_ts_enabled = {
-        if sock.enable_tx_timestamp().is_err() {
-            eprintln!("Failed to enable TX timestamp");
-            false
-        } else {
-            eprintln!("Socket TX timestamp enabled");
-            true
-        }
-    };
     let mut tx_perf_buff = vec![0u8; args.size - 14];
     let mut tx_eth_buff = vec![0u8; args.size];
 
@@ -305,13 +296,15 @@ fn do_client(args: ClientArgs) {
         iov_base: rx_eth_buff.as_mut_ptr() as *mut libc::c_void,
         iov_len: rx_eth_buff.len(),
     };
-    if !args.oneway {
-        if sock.enable_rx_timestamp(&mut iov).is_err() {
-            eprintln!("Failed to enable RX timestamp");
+    let is_tx_ts_enabled = {
+        if sock.enable_timestamps(if args.oneway { None } else { Some(&mut iov) }).is_err() {
+            eprintln!("Failed to enable timestamps");
+            false
         } else {
-            eprintln!("Socket RX timestamp enabled");
+            eprintln!("Socket TX/RX timestamp enabled");
+            true
         }
-    }
+    };
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
 
     for ping_id in 1..=args.count {

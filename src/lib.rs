@@ -51,16 +51,12 @@ impl TsnSocket {
         recv_msg(self, msg)
     }
 
-    pub fn enable_tx_timestamp(&self) -> Result<(), Error> {
-        enable_tx_timestamp(self)
+    pub fn enable_timestamps(&mut self, iov: Option<&mut libc::iovec>) -> Result<(), Error> {
+        enable_timestamps(self, iov)
     }
 
     pub fn get_tx_timestamp(&self) -> Result<time::Timespec, Error> {
         get_tx_timestamp(self)
-    }
-
-    pub fn enable_rx_timestamp(&mut self, iov: &mut libc::iovec) -> Result<(), Error> {
-        enable_rx_timestamp(self, iov)
     }
 
     pub fn get_rx_timestamp(&self) -> Result<time::Timespec, Error> {
@@ -276,17 +272,14 @@ pub fn recv_msg(sock: &TsnSocket, msg: &mut msghdr) -> Result<isize, String> {
     }
 }
 
-pub fn enable_tx_timestamp(sock: &TsnSocket) -> Result<(), Error> {
+pub fn enable_timestamps(sock: &mut TsnSocket, iov: Option<&mut libc::iovec>) -> Result<(), Error> {
     let sockfd = sock.fd;
     let interface_name = &sock.ifname;
 
-    // setsockopt
     let ts_flags: u32 = libc::SOF_TIMESTAMPING_TX_HARDWARE
+        | libc::SOF_TIMESTAMPING_RX_HARDWARE
         | libc::SOF_TIMESTAMPING_SYS_HARDWARE
-        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
-        | libc::SOF_TIMESTAMPING_TX_SOFTWARE
-        | libc::SOF_TIMESTAMPING_RX_SOFTWARE
-        | libc::SOF_TIMESTAMPING_SOFTWARE;
+        | libc::SOF_TIMESTAMPING_RAW_HARDWARE;
 
     let err = unsafe {
         libc::setsockopt(
@@ -316,6 +309,8 @@ pub fn enable_tx_timestamp(sock: &TsnSocket) -> Result<(), Error> {
     if err < 0 {
         return Err(Error::last_os_error());
     }
+    
+    // Always enable timestamps as disabling it will stop ptp4l
 
     // ioctl
     let mut ts_cfg = libc::hwtstamp_config {
@@ -345,6 +340,23 @@ pub fn enable_tx_timestamp(sock: &TsnSocket) -> Result<(), Error> {
         // XXX: While ioctl failed, SW timestamp is still enabled.
         eprintln!("ioctl SIOCSHWTSTAMP failed: {}", Error::last_os_error());
         eprintln!("But SW timestamp by kernel is still enabled.")
+    }
+
+    if Option::is_some(&iov) {
+        const CONTROLSIZE: usize = 1024;
+        let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
+
+        let msg = msghdr {
+            msg_iov: iov.unwrap(),
+            msg_iovlen: 1,
+            msg_control: control.as_mut_ptr() as *mut libc::c_void,
+            msg_controllen: CONTROLSIZE,
+            msg_flags: 0,
+            msg_name: std::ptr::null_mut::<libc::c_void>(),
+            msg_namelen: 0,
+        };
+
+        sock.msg = Some(msg);
     }
 
     Ok(())
@@ -455,42 +467,6 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
     }
 
     Err(Error::new(ErrorKind::NotFound, "No timestamp found"))
-}
-
-pub fn enable_rx_timestamp(sock: &mut TsnSocket, iov: &mut libc::iovec) -> Result<(), Error> {
-    const CONTROLSIZE: usize = 1024;
-    let mut control: [libc::c_char; CONTROLSIZE] = [0; CONTROLSIZE];
-
-    let msg = msghdr {
-        msg_iov: iov,
-        msg_iovlen: 1,
-        msg_control: control.as_mut_ptr() as *mut libc::c_void,
-        msg_controllen: CONTROLSIZE,
-        msg_flags: 0,
-        msg_name: std::ptr::null_mut::<libc::c_void>(),
-        msg_namelen: 0,
-    };
-
-    let sockflags: u32 = libc::SOF_TIMESTAMPING_RX_HARDWARE
-        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
-        | libc::SOF_TIMESTAMPING_SOFTWARE;
-
-    let res = unsafe {
-        libc::setsockopt(
-            sock.fd,
-            libc::SOL_SOCKET,
-            libc::SO_TIMESTAMPNS,
-            &sockflags as *const u32 as *const libc::c_void,
-            mem::size_of_val(&sockflags) as u32,
-        )
-    };
-
-    if res < 0 {
-        Err(Error::last_os_error())
-    } else {
-        sock.msg = Some(msg);
-        Ok(())
-    }
 }
 
 pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {

@@ -24,7 +24,7 @@ static uint64_t bytes_to_ns(uint64_t bytes);
 static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint8_t tc_id, uint64_t bytes);
 static bool get_timestamps(struct timestamps* timestamps, const struct tsn_config* tsn_config, timestamp_t from, uint8_t tc_id, uint64_t bytes, bool consider_delay);
 
-static void update_buffer(struct xdma_dev* xdev);
+static void update_buffer(struct xdma_dev* xdev, uint32_t min_space);
 static void decrease_buffer_space(struct xdma_dev* xdev);
 static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space);
 
@@ -110,6 +110,10 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		// Don't care. Just fill in the metadata
 		// timestamps.from = tsn_config->total_available_at;
 		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
+
+		if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
+			return false;
+		}
 		timestamps.from = from;
 		timestamps.to = TSN_ALWAYS_OPEN(from);
 		timestamps.delay_from = from;
@@ -426,8 +430,9 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 	return true;
 }
 
-static void update_buffer(struct xdma_dev* xdev) {
-	if (xdev->tsn_config.buffer_space < HW_QUEUE_SIZE_PAD) {
+static void update_buffer(struct xdma_dev* xdev, uint32_t min_space) {
+	uint32_t threshold = min_space > HW_QUEUE_SIZE_PAD ? min_space : HW_QUEUE_SIZE_PAD;
+	if (xdev->tsn_config.buffer_space <= threshold) {
 		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
 		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
 		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
@@ -440,7 +445,7 @@ static void decrease_buffer_space(struct xdma_dev* xdev) {
 }
 
 static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space) {
-	update_buffer(xdev);
+	update_buffer(xdev, min_space);
 	return xdev->tsn_config.buffer_space > min_space;
 }
 

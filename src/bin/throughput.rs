@@ -408,7 +408,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
             elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
         }
 
-        if now.elapsed().as_secs() > (duration + warmup) as u64 || !unsafe { RUNNING } {
+        if now.elapsed().as_secs() >= (duration + warmup) as u64 || !unsafe { RUNNING } {
             break;
         }
 

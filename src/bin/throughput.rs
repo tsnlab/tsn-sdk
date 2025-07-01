@@ -14,6 +14,8 @@ use pnet_macros_support::types::u32be;
 use pnet_packet::Packet;
 use pnet_packet::PrimitiveValues;
 
+const NS_IN_SEC: u64 = 1_000_000_000;
+
 const VLAN_ID_PERF: u16 = 10;
 const VLAN_PRI_PERF: u32 = 3;
 const ETHERTYPE_PERF: u16 = 0x1337;
@@ -393,21 +395,23 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
     let now = Instant::now();
     let mut last_id = 0;
 
+    // Calculate interval between packets to achieve the desired bitrate
     let packet_bits = (14 + 8 + size + 4) * 8; // Ethernet header + Perf header + payload + VLAN tag
+    let interval_sec = packet_bits as f64 / bitrate as f64;
+    let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
     let mut last_send_time = Instant::now();
-
-    let time_needed_for_packet = packet_bits as f64 / bitrate as f64;
-    let interval_ns = (time_needed_for_packet * 1_000_000_000.0) as u64;
 
     loop {
         let current_time = Instant::now();
         let mut elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
 
+        // Wait for the interval to pass
         while elapsed_ns < interval_ns {
             let current_time = Instant::now();
             elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
         }
 
+        // Check if we should stop
         if now.elapsed().as_secs() >= (duration + warmup) as u64 || !unsafe { RUNNING } {
             break;
         }

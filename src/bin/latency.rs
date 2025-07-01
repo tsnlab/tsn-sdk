@@ -340,13 +340,15 @@ fn do_client(args: ClientArgs) {
             }
         }
         if args.oneway {
-            perf_pkt.set_tv_sec(tx_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32);
-            perf_pkt.set_tv_nsec(
-                tx_timestamp
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .subsec_nanos(),
-            );
+            let (tv_sec, tv_nsec) = match tx_timestamp.duration_since(UNIX_EPOCH) {
+                Ok(ts) => (ts.as_secs() as u32, ts.subsec_nanos()),
+                Err(err) => {
+                    eprintln!("TX time before UNIX epoch: {:?}", tx_timestamp);
+                    continue;
+                }
+            };
+            perf_pkt.set_tv_sec(tv_sec);
+            perf_pkt.set_tv_nsec(tv_nsec);
             perf_pkt.set_op(PerfOp::Sync as u8);
 
             eth_pkt.set_payload(perf_pkt.packet());

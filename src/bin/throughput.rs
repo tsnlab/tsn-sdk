@@ -14,6 +14,8 @@ use pnet_macros_support::types::u32be;
 use pnet_packet::Packet;
 use pnet_packet::PrimitiveValues;
 
+const NS_IN_SEC: u64 = 1_000_000_000;
+
 const VLAN_ID_PERF: u16 = 10;
 const VLAN_PRI_PERF: u32 = 3;
 const ETHERTYPE_PERF: u16 = 0x1337;
@@ -123,6 +125,11 @@ fn main() {
             arg!(warmup: -w --warmup <warmup>)
                 .required(false)
                 .default_value("0"),
+        )
+        .arg(
+            arg!(bitrate: -b --bitrate <bitrate>)
+                .required(false)
+                .default_value("1000000000"),  // 1 Gbps
         );
 
     let matched_command = Command::new("throughput")
@@ -153,8 +160,13 @@ fn main() {
                 .unwrap()
                 .parse()
                 .unwrap();
+            let bitrate: usize = client_matches
+                .value_of("bitrate")
+                .unwrap()
+                .parse()
+                .unwrap();
 
-            do_client(iface, target, size, duration, warmup)
+            do_client(iface, target, size, duration, warmup, bitrate)
         }
         _ => panic!("Invalid command"),
     }
@@ -299,7 +311,7 @@ fn do_server(iface_name: String) {
     }
 }
 
-fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize) {
+fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize, bitrate: usize) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
@@ -382,7 +394,30 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
     let now = Instant::now();
     let mut last_id = 0;
+
+    // Calculate interval between packets to achieve the desired bitrate
+    let packet_bits = (14 + 8 + size + 4) * 8; // Ethernet header + Perf header + payload + VLAN tag
+    let interval_sec = packet_bits as f64 / bitrate as f64;
+    let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
+    let mut last_send_time = Instant::now();
+
     loop {
+        let current_time = Instant::now();
+        let mut elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
+
+        // Wait for the interval to pass
+        while elapsed_ns < interval_ns {
+            let current_time = Instant::now();
+            elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
+        }
+
+        // Check if we should stop
+        if now.elapsed().as_secs() >= (duration + warmup) as u64 || !unsafe { RUNNING } {
+            break;
+        }
+
+        last_send_time = Instant::now();
+
         let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
         perf_pkt.set_id(last_id); // TODO: Randomize
         perf_pkt.set_op(PerfOpFieldValues::Data);
@@ -391,10 +426,6 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         if sock.send(eth_pkt.packet()).is_err() {}
 
         last_id += 1;
-
-        if now.elapsed().as_secs() > (duration + warmup) as u64 || !unsafe { RUNNING } {
-            break;
-        }
     }
 
     // Request end

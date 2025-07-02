@@ -4,6 +4,7 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub struct TasConfig {
     pub txtime_delay: i64,
+    #[allow(dead_code)]
     pub schedule: Vec<TasSchedule>,
     pub tc_map: HashMap<i64, i64>,
     pub num_tc: i64,

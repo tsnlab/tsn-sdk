@@ -489,7 +489,7 @@ fn wait_for_response(sock: &mut tsn::TsnSocket, op: PerfOpField) -> Result<(), (
 }
 
 fn stats_worker() {
-    let mut last_id = 0;
+    let mut last_id: u32;
     let mut last_bytes = 0;
     let mut last_packets = 0;
 

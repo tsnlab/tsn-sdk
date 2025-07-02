@@ -1,3 +1,7 @@
+// #[packet] causes 'unexpected cfg' warnings, since pnet does not support cfg(clippy)
+// It does not cause any issues, so we can ignore it
+#![allow(unexpected_cfgs)]
+
 use std::collections::HashMap;
 use std::option::Option;
 use std::thread;

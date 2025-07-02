@@ -1,3 +1,7 @@
+// #[packet] causes 'unexpected cfg' warnings, since pnet does not support cfg(clippy)
+// It does not cause any issues, so we can ignore it
+#![allow(unexpected_cfgs)]
+
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;

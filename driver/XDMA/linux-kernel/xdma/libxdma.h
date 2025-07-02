@@ -251,15 +251,16 @@
 #define dbg_init	pr_err
 #define dbg_desc	pr_err
 #else
+#define empty_func(...) do {} while (0)
 /* disable debugging */
-#define dbg_io(...)
-#define dbg_fops(...)
-#define dbg_perf(...)
-#define dbg_sg(...)
-#define dbg_tfr(...)
-#define dbg_irq(...)
-#define dbg_init(...)
-#define dbg_desc(...)
+#define dbg_io      empty_func
+#define dbg_fops    empty_func
+#define dbg_perf    empty_func
+#define dbg_sg      empty_func
+#define dbg_tfr     empty_func
+#define dbg_irq     empty_func
+#define dbg_init    empty_func
+#define dbg_desc    empty_func
 #endif
 
 /* SECTION: Enum definitions */

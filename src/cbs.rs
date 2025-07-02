@@ -4,7 +4,7 @@ use std::process::Command;
 use std::str;
 #[derive(Clone)]
 pub struct CbsChild {
-    #[allow(dead_code)]
+    #[allow(dead_code)]  // Leave this field since it might be used for debug
     pub prio: i64,
     pub max_frame: i64,
     pub bandwidth: i64,
@@ -24,7 +24,7 @@ pub struct CbsConfig {
     pub num_tc: i64,
     pub queues: Vec<String>,
     pub children: HashMap<i64, CbsCredit>,
-    #[allow(dead_code)]
+    #[allow(dead_code)]  // Leave this field since it might be used for debug
     pub streams: HashMap<char, Vec<CbsChild>>,
 }
 

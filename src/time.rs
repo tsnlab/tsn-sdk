@@ -10,7 +10,12 @@ pub struct Timespec {
 }
 
 fn is_analysed() -> bool {
-    unsafe { ERROR_CLOCK_GETTIME.as_secs() != 1 && ERROR_NANOSLEEP.as_secs() != 1 }
+    unsafe {
+        // Direct access to mutable static variable causes warning
+        let error_clock_gettime = ERROR_CLOCK_GETTIME;
+        let error_nanosleep = ERROR_NANOSLEEP;
+        error_clock_gettime.as_secs() != 1 && error_nanosleep.as_secs() != 1
+    }
 }
 
 pub fn tsn_time_analyze() {

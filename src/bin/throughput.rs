@@ -1,3 +1,7 @@
+// #[packet] causes 'unexpected cfg' warnings, since pnet does not support cfg(clippy)
+// It does not cause any issues, so we can ignore it
+#![allow(unexpected_cfgs)]
+
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -293,11 +297,14 @@ fn do_server(iface_name: String) {
 
                 // Print statistics
                 unsafe {
+                    let pkt_count = STATS.pkt_count;
+                    let total_bytes = STATS.total_bytes;
+                    let duration = STATS.duration;
                     println!(
                         "{} packets, {} bytes {} bps",
-                        STATS.pkt_count,
-                        STATS.total_bytes,
-                        STATS.total_bytes * 8 / STATS.duration
+                        pkt_count,
+                        total_bytes,
+                        total_bytes * 8 / duration
                     );
                 }
             }
@@ -486,22 +493,22 @@ fn wait_for_response(sock: &mut tsn::TsnSocket, op: PerfOpField) -> Result<(), (
 }
 
 fn stats_worker() {
-    let stats = unsafe { &mut STATS };
-    let mut last_id = 0;
+    let mut last_id: u32;
     let mut last_bytes = 0;
     let mut last_packets = 0;
 
     const SECOND: Duration = Duration::from_secs(1);
 
-    if stats.warmup_state == WarmupState::Ready {
-        stats.warmup_state = WarmupState::WarmingUp;
-        println!("Warming up");
-        thread::sleep(Duration::from_secs(stats.warmup as u64));
-        println!("Finished warmup");
-        stats.warmup_state = WarmupState::Finished;
+    unsafe {
+        if STATS.warmup_state == WarmupState::Ready {
+            STATS.warmup_state = WarmupState::WarmingUp;
+            println!("Warming up");
+            thread::sleep(Duration::from_secs(STATS.warmup as u64));
+            println!("Finished warmup");
+            STATS.warmup_state = WarmupState::Finished;
+        }
+        last_id = STATS.last_id;
     }
-
-    last_id = stats.last_id;
 
     let start_time = Instant::now();
     let mut last_time = start_time;
@@ -514,16 +521,16 @@ fn stats_worker() {
 
         last_time = Instant::now();
 
-        let id = stats.last_id;
-        let bytes = stats.total_bytes;
+        let (id, bytes, total_packets, duration) = unsafe {
+            (STATS.last_id, STATS.total_bytes, STATS.pkt_count, STATS.duration)
+        };
         let bits = (bytes - last_bytes) * 8;
-        let total_packets = stats.pkt_count;
         let packets = total_packets - last_packets;
         let loss_rate = 1.0 - packets as f64 / (id - last_id) as f64;
 
         let lap = start_time.elapsed().as_secs();
 
-        if lap > stats.duration as u64 {
+        if lap > duration as u64 {
             unsafe {
                 TEST_RUNNING = false;
             }

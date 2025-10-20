@@ -126,7 +126,7 @@ fn main() {
         .arg(
             arg!(duration: -d --duration <duration>)
                 .required(false)
-                .default_value("10"),
+                .default_value("0"),
         )
         .arg(
             arg!(warmup: -w --warmup <warmup>)
@@ -452,7 +452,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         }
 
         // Check if we should stop
-        if now.elapsed().as_secs() >= (duration + warmup) as u64 || !unsafe { RUNNING } {
+        if (duration > 0 && now.elapsed().as_secs() >= (duration + warmup) as u64) || !unsafe { RUNNING } {
             break;
         }
 

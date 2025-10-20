@@ -8,8 +8,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use clap::{arg, crate_authors, crate_version, Command};
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
-use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
+use evdev::{Device, InputEventKind, Key};
 use num_format::{Locale, ToFormattedString};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 
@@ -137,6 +136,10 @@ fn main() {
             arg!(bitrate: -b --bitrate <bitrate>)
                 .required(false)
                 .default_value("1000000"),  // 1 Mbps
+        )
+        .arg(
+            arg!(kbd_device: -k --kbd_device <kbd_device> "Keyboard evdev device path (e.g., /dev/input/by-id/...-event-kbd)")
+                .required(true),
         );
 
     let matched_command = Command::new("throughput")
@@ -172,8 +175,9 @@ fn main() {
                 .unwrap()
                 .parse()
                 .unwrap();
+            let kbd_device: String = client_matches.value_of("kbd_device").unwrap().to_string();
 
-            do_client(iface, target, size, duration, warmup, bitrate)
+            do_client(iface, target, size, duration, warmup, bitrate, kbd_device)
         }
         _ => panic!("Invalid command"),
     }
@@ -321,7 +325,7 @@ fn do_server(iface_name: String) {
     }
 }
 
-fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize, initial_bitrate: usize) {
+fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize, initial_bitrate: usize, kbd_device: String) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
@@ -375,49 +379,60 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         }
     });
 
-    // Start keyboard input handler
-    enable_raw_mode().expect("Failed to enable raw mode");
+    // Start keyboard input handler (evdev)
     let bitrate_for_keyboard = Arc::clone(&bitrate);
+    let kbd_path_for_thread = kbd_device.clone();
     thread::spawn(move || {
+        let mut device = Device::open(kbd_path_for_thread).expect("Failed to open evdev keyboard device");
         loop {
-            if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
-                match code {
-                    KeyCode::Up => {
-                        let mut current_bitrate = bitrate_for_keyboard.lock().unwrap();
-                        *current_bitrate += 1_000_000; // 1 Mbps increase
-                    }
-                    KeyCode::Down => {
-                        let mut current_bitrate = bitrate_for_keyboard.lock().unwrap();
-                        if *current_bitrate > 100_000 { // Prevent going below 100 kbps
-                            *current_bitrate -= 1_000_000; // 1 Mbps decrease
+            match device.fetch_events() {
+                Ok(events) => {
+                    for ev in events {
+                        if let InputEventKind::Key(key) = ev.kind() {
+                            if ev.value() == 1 { // key press
+                                match key {
+                                    Key::KEY_UP => {
+                                        let mut current = bitrate_for_keyboard.lock().unwrap();
+                                        *current += 1_000_000;
+                                    }
+                                    Key::KEY_DOWN => {
+                                        let mut current = bitrate_for_keyboard.lock().unwrap();
+                                        if *current > 100_000 {
+                                            *current = current.saturating_sub(1_000_000);
+                                        }
+                                    }
+                                    Key::KEY_LEFT => {
+                                        let mut current = bitrate_for_keyboard.lock().unwrap();
+                                        if *current > 100_000 {
+                                            *current = current.saturating_sub(100_000);
+                                        }
+                                    }
+                                    Key::KEY_RIGHT => {
+                                        let mut current = bitrate_for_keyboard.lock().unwrap();
+                                        *current += 100_000;
+                                    }
+                                    Key::KEY_Q => {
+                                        unsafe { RUNNING = false; }
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
-                    KeyCode::Left => {
-                        let mut current_bitrate = bitrate_for_keyboard.lock().unwrap();
-                        if *current_bitrate > 100_000 { // Prevent going below 100 kbps
-                            *current_bitrate -= 100_000; // 100 kbps decrease
-                        }
-                    }
-                    KeyCode::Right => {
-                        let mut current_bitrate = bitrate_for_keyboard.lock().unwrap();
-                        *current_bitrate += 100_000; // 100 kbps increase
-                    }
-                    KeyCode::Char('q') | KeyCode::Char('Q') => {
-                        unsafe {
-                            RUNNING = false;
-                        }
-                        break;
-                    }
-                    _ => {}
                 }
+                Err(e) => {
+                    eprintln!("evdev read error: {}", e);
+                }
+            }
+            if !unsafe { RUNNING } {
+                break;
             }
         }
     });
 
     // Send data
-    disable_raw_mode().expect("Failed to disable raw mode");
     println!("Sending data");
-    enable_raw_mode().expect("Failed to enable raw mode");
     let mut perf_buffer = vec![0; 8 + size];
     let mut eth_buffer = vec![0; 14 + 8 + size];
     let mut eth_pkt = MutableEthernetPacket::new(&mut eth_buffer).unwrap();
@@ -473,10 +488,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         if current_time.duration_since(last_stats_time).as_secs() >= 1 {
             let elapsed_sec = current_time.duration_since(last_stats_time).as_secs() as f64;
             let actual_bps = (bytes_sent * 8) as f64 / elapsed_sec;
-            disable_raw_mode().expect("Failed to disable raw mode");
             println!("Actual throughput: {:.0} bps ({:.2} Mbps)",
                    actual_bps, actual_bps / 1_000_000.0);
-            enable_raw_mode().expect("Failed to enable raw mode");
 
             // Reset counters
             bytes_sent = 0;
@@ -489,8 +502,6 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         eprintln!("Failed to close socket: {}", e)
     }
 
-    // Disable raw mode
-    disable_raw_mode().expect("Failed to disable raw mode");
 }
 
 fn wait_for_response(sock: &mut tsn::TsnSocket, op: PerfOpField) -> Result<(), ()> {

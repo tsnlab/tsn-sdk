@@ -393,7 +393,9 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                                 match key {
                                     Key::KEY_UP => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        *current += 1_000_000;
+                                        if *current < 10_000_000 {
+                                            *current += 1_000_000;
+                                        }
                                     }
                                     Key::KEY_DOWN => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
@@ -409,7 +411,9 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                                     }
                                     Key::KEY_RIGHT => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        *current += 100_000;
+                                        if *current < 10_000_000 {
+                                            *current += 100_000;
+                                        }
                                     }
                                     Key::KEY_Q => {
                                         unsafe { RUNNING = false; }

@@ -397,7 +397,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                                     }
                                     Key::KEY_DOWN => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current > 100_000 {
+                                        if *current > 1_000_000 {
                                             *current = current.saturating_sub(1_000_000);
                                         }
                                     }

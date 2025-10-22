@@ -500,7 +500,10 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         if current_time.duration_since(last_stats_time).as_secs() >= 1 {
             let elapsed_sec = current_time.duration_since(last_stats_time).as_secs() as f64;
             let actual_bps = (bytes_sent * 8) as f64 / elapsed_sec;
-            let throughput_ratio = actual_bps / maximum_bitrate as f64;
+            let mut throughput_ratio = actual_bps / maximum_bitrate as f64;
+            if throughput_ratio > 1.0 {
+                throughput_ratio = 1.0;
+            }
             println!("Actual throughput: {:.0} bps ({:.2} Mbps) - {:.1}% of max",
                    actual_bps, actual_bps / 1_000_000.0, throughput_ratio * 100.0);
 

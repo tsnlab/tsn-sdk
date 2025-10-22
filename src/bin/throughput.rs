@@ -507,14 +507,18 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
             println!("Actual throughput: {:.0} bps ({:.2} Mbps) - {:.1}% of max",
                    actual_bps, actual_bps / 1_000_000.0, throughput_ratio * 100.0);
 
-            // Write throughput ratio to /var/traffic file
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open("/var/run/traffic") {
-                let _ = writeln!(file, "{:.3}", throughput_ratio);
-            }
+            // Write throughput ratio to /var/run/traffic file (non-blocking)
+            let ratio_to_write = throughput_ratio;
+            std::thread::spawn(move || {
+                if let Ok(mut file) = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open("/var/run/traffic") {
+                    let _ = writeln!(file, "{:.3}", ratio_to_write);
+                    let _ = file.flush();
+                }
+            });
 
             // Reset counters
             bytes_sent = 0;

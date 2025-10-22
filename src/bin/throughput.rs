@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 use clap::{arg, crate_authors, crate_version, Command};
 use evdev::{Device, InputEventKind, Key};
@@ -379,6 +381,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         }
     });
 
+    let maximum_bitrate = 10_000_000;
+
     // Start keyboard input handler (evdev)
     let bitrate_for_keyboard = Arc::clone(&bitrate);
     let kbd_path_for_thread = kbd_device.clone();
@@ -393,7 +397,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                                 match key {
                                     Key::KEY_UP => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current < 10_000_000 {
+                                        if *current < maximum_bitrate {
                                             *current += 1_000_000;
                                         }
                                     }
@@ -401,17 +405,21 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
                                         if *current > 1_000_000 {
                                             *current = current.saturating_sub(1_000_000);
+                                        } else {
+                                            *current = 0;
                                         }
                                     }
                                     Key::KEY_LEFT => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
                                         if *current > 100_000 {
                                             *current = current.saturating_sub(100_000);
+                                        } else {
+                                            *current = 0;
                                         }
                                     }
                                     Key::KEY_RIGHT => {
                                         let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current < 10_000_000 {
+                                        if *current < maximum_bitrate {
                                             *current += 100_000;
                                         }
                                     }
@@ -492,8 +500,18 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         if current_time.duration_since(last_stats_time).as_secs() >= 1 {
             let elapsed_sec = current_time.duration_since(last_stats_time).as_secs() as f64;
             let actual_bps = (bytes_sent * 8) as f64 / elapsed_sec;
-            println!("Actual throughput: {:.0} bps ({:.2} Mbps)",
-                   actual_bps, actual_bps / 1_000_000.0);
+            let throughput_ratio = actual_bps / maximum_bitrate as f64;
+            println!("Actual throughput: {:.0} bps ({:.2} Mbps) - {:.1}% of max",
+                   actual_bps, actual_bps / 1_000_000.0, throughput_ratio * 100.0);
+
+            // Write throughput ratio to /var/traffic file
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open("/var/traffic") {
+                let _ = writeln!(file, "{:.3}", throughput_ratio);
+            }
 
             // Reset counters
             bytes_sent = 0;

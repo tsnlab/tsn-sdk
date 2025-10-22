@@ -384,51 +384,58 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
     let maximum_bitrate = 10_000_000;
 
-    // Start keyboard input handler (evdev)
+    // Start keyboard input handler (evdev) - update every 0.2 seconds
     let bitrate_for_keyboard = Arc::clone(&bitrate);
     let kbd_path_for_thread = kbd_device.clone();
     thread::spawn(move || {
         let mut device = Device::open(kbd_path_for_thread).expect("Failed to open evdev keyboard device");
+        let mut last_update = Instant::now();
+        let update_interval = Duration::from_millis(200); // 0.2 seconds
+
         loop {
             match device.fetch_events() {
                 Ok(events) => {
                     for ev in events {
                         if let InputEventKind::Key(key) = ev.kind() {
                             if ev.value() == 1 { // key press
-                                match key {
-                                    Key::KEY_UP => {
-                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
-                                        if current < maximum_bitrate {
-                                            bitrate_for_keyboard.store(current + 1_000_000, Ordering::Relaxed);
+                                let now = Instant::now();
+                                if now.duration_since(last_update) >= update_interval {
+                                    match key {
+                                        Key::KEY_UP => {
+                                            let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                            if current < maximum_bitrate {
+                                                bitrate_for_keyboard.store(current + 1_000_000, Ordering::Relaxed);
+                                            }
                                         }
-                                    }
-                                    Key::KEY_DOWN => {
-                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
-                                        if current > 1_000_000 {
-                                            bitrate_for_keyboard.store(current.saturating_sub(1_000_000), Ordering::Relaxed);
-                                        } else {
-                                            bitrate_for_keyboard.store(0, Ordering::Relaxed);
+                                        Key::KEY_DOWN => {
+                                            let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                            if current > 1_000_000 {
+                                                bitrate_for_keyboard.store(current.saturating_sub(1_000_000), Ordering::Relaxed);
+                                            } else {
+                                                bitrate_for_keyboard.store(0, Ordering::Relaxed);
+                                            }
                                         }
-                                    }
-                                    Key::KEY_LEFT => {
-                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
-                                        if current > 100_000 {
-                                            bitrate_for_keyboard.store(current.saturating_sub(100_000), Ordering::Relaxed);
-                                        } else {
-                                            bitrate_for_keyboard.store(0, Ordering::Relaxed);
+                                        Key::KEY_LEFT => {
+                                            let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                            if current > 100_000 {
+                                                bitrate_for_keyboard.store(current.saturating_sub(100_000), Ordering::Relaxed);
+                                            } else {
+                                                bitrate_for_keyboard.store(0, Ordering::Relaxed);
+                                            }
                                         }
-                                    }
-                                    Key::KEY_RIGHT => {
-                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
-                                        if current < maximum_bitrate {
-                                            bitrate_for_keyboard.store(current + 100_000, Ordering::Relaxed);
+                                        Key::KEY_RIGHT => {
+                                            let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                            if current < maximum_bitrate {
+                                                bitrate_for_keyboard.store(current + 100_000, Ordering::Relaxed);
+                                            }
                                         }
+                                        Key::KEY_Q => {
+                                            unsafe { RUNNING = false; }
+                                            return;
+                                        }
+                                        _ => {}
                                     }
-                                    Key::KEY_Q => {
-                                        unsafe { RUNNING = false; }
-                                        return;
-                                    }
-                                    _ => {}
+                                    last_update = now;
                                 }
                             }
                         }

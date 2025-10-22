@@ -512,7 +512,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                 .create(true)
                 .write(true)
                 .truncate(true)
-                .open("/var/traffic") {
+                .open("/var/run/traffic") {
                 let _ = writeln!(file, "{:.3}", throughput_ratio);
             }
 

@@ -2,7 +2,8 @@
 // It does not cause any issues, so we can ignore it
 #![allow(unexpected_cfgs)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -335,8 +336,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
     let target: MacAddr = target.parse().expect("Invalid MAC address");
 
-    // Create shared bitrate variable
-    let bitrate = Arc::new(Mutex::new(initial_bitrate));
+    // Create shared bitrate variable (atomic, no locks needed)
+    let bitrate = Arc::new(AtomicUsize::new(initial_bitrate));
 
     let mut sock = match tsn::sock_open(&iface_name, VLAN_ID_PERF, VLAN_PRI_PERF, ETH_P_PERF) {
         Ok(sock) => sock,
@@ -396,31 +397,31 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
                             if ev.value() == 1 { // key press
                                 match key {
                                     Key::KEY_UP => {
-                                        let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current < maximum_bitrate {
-                                            *current += 1_000_000;
+                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                        if current < maximum_bitrate {
+                                            bitrate_for_keyboard.store(current + 1_000_000, Ordering::Relaxed);
                                         }
                                     }
                                     Key::KEY_DOWN => {
-                                        let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current > 1_000_000 {
-                                            *current = current.saturating_sub(1_000_000);
+                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                        if current > 1_000_000 {
+                                            bitrate_for_keyboard.store(current.saturating_sub(1_000_000), Ordering::Relaxed);
                                         } else {
-                                            *current = 0;
+                                            bitrate_for_keyboard.store(0, Ordering::Relaxed);
                                         }
                                     }
                                     Key::KEY_LEFT => {
-                                        let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current > 100_000 {
-                                            *current = current.saturating_sub(100_000);
+                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                        if current > 100_000 {
+                                            bitrate_for_keyboard.store(current.saturating_sub(100_000), Ordering::Relaxed);
                                         } else {
-                                            *current = 0;
+                                            bitrate_for_keyboard.store(0, Ordering::Relaxed);
                                         }
                                     }
                                     Key::KEY_RIGHT => {
-                                        let mut current = bitrate_for_keyboard.lock().unwrap();
-                                        if *current < maximum_bitrate {
-                                            *current += 100_000;
+                                        let current = bitrate_for_keyboard.load(Ordering::Relaxed);
+                                        if current < maximum_bitrate {
+                                            bitrate_for_keyboard.store(current + 100_000, Ordering::Relaxed);
                                         }
                                     }
                                     Key::KEY_Q => {
@@ -467,8 +468,8 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
         let current_time = Instant::now();
         let mut elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
 
-        // Get current bitrate and calculate interval
-        let current_bitrate = *bitrate.lock().unwrap();
+        // Get current bitrate and calculate interval (atomic read, no locks)
+        let current_bitrate = bitrate.load(Ordering::Relaxed);
         let interval_sec = packet_bits as f64 / current_bitrate as f64;
         let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
 

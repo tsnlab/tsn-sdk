@@ -507,18 +507,15 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
             println!("Actual throughput: {:.0} bps ({:.2} Mbps) - {:.1}% of max",
                    actual_bps, actual_bps / 1_000_000.0, throughput_ratio * 100.0);
 
-            // Write throughput ratio to /var/run/traffic file (atomic write)
+            // Write throughput ratio to /var/run/traffic file using echo command
             let ratio_to_write = throughput_ratio;
             std::thread::spawn(move || {
-                use std::fs;
-
-                // Write to temporary file first, then rename (atomic operation)
-                let temp_path = "/var/run/traffic.tmp";
-                let final_path = "/var/run/traffic";
-
-                let content = format!("{:.3}", ratio_to_write);
-                let _ = fs::write(temp_path, content);
-                let _ = fs::rename(temp_path, final_path);
+                use std::process::Command;
+                let output = Command::new("sh")
+                    .arg("-c")
+                    .arg(&format!("echo '{:.3}' > /var/run/traffic", ratio_to_write))
+                    .output();
+                let _ = output; // Ignore result to prevent blocking
             });
 
             // Reset counters

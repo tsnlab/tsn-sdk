@@ -477,33 +477,35 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
         // Get current bitrate and calculate interval (atomic read, no locks)
         let current_bitrate = bitrate.load(Ordering::Relaxed);
-        let interval_sec = packet_bits as f64 / current_bitrate as f64;
-        let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
-
-        // Wait for the interval to pass
-        while elapsed_ns < interval_ns {
-            let current_time = Instant::now();
-            elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
-        }
 
         // Check if we should stop
         if (duration > 0 && now.elapsed().as_secs() >= (duration + warmup) as u64) || !unsafe { RUNNING } {
             break;
         }
+        
+        if current_bitrate > 0 {
+            let interval_sec = packet_bits as f64 / current_bitrate as f64;
+            let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
 
-        last_send_time = Instant::now();
+            // Wait for the interval to pass
+            while elapsed_ns < interval_ns {
+                let current_time = Instant::now();
+                elapsed_ns = current_time.duration_since(last_send_time).as_nanos() as u64;
+            }
 
-        let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
-        perf_pkt.set_id(last_id); // TODO: Randomize
-        perf_pkt.set_op(PerfOpFieldValues::Data);
+            last_send_time = Instant::now();
 
-        eth_pkt.set_payload(perf_pkt.packet());
-        if sock.send(eth_pkt.packet()).is_ok() {
-            bytes_sent += packet_bits / 8; // Convert bits to bytes
+            let mut perf_pkt = MutablePerfPacket::new(&mut perf_buffer).unwrap();
+            perf_pkt.set_id(last_id); // TODO: Randomize
+            perf_pkt.set_op(PerfOpFieldValues::Data);
+
+            eth_pkt.set_payload(perf_pkt.packet());
+            if sock.send(eth_pkt.packet()).is_ok() {
+                bytes_sent += packet_bits / 8; // Convert bits to bytes
+            }
+
+            last_id += 1;
         }
-
-        last_id += 1;
-
         // Print statistics every second
         if current_time.duration_since(last_stats_time).as_secs() >= 1 {
             let elapsed_sec = current_time.duration_since(last_stats_time).as_secs() as f64;

@@ -507,9 +507,9 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
 
             last_id += 1;
         }
-        // Print statistics every second
-        if current_time.duration_since(last_stats_time).as_secs() >= 1 {
-            let elapsed_sec = current_time.duration_since(last_stats_time).as_secs() as f64;
+        // Print statistics every 100 ms
+        if current_time.duration_since(last_stats_time) >= Duration::from_millis(100) {
+            let elapsed_sec = current_time.duration_since(last_stats_time).as_secs_f64();
             let actual_bps = (bytes_sent * 8) as f64 / elapsed_sec;
             let mut throughput_ratio = actual_bps / max_bitrate as f64;
             if throughput_ratio > 1.0 {

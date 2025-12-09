@@ -9,6 +9,7 @@
 #include "libxdma.h"
 #include "tsn.h"
 #include "alinx_arch.h"
+#include "frer.h"
 
 #define LOWER_29_BITS ((1ULL << 29) - 1)
 #define TX_WORK_OVERFLOW_MARGIN 100
@@ -175,15 +176,39 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         sys_count_upper = sys_count & ~LOWER_29_BITS;
 
 
-        /* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
-        if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {
-                // TODO: Increment SW drop stats
+	/* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
+	if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {
 #ifdef __LIBXDMA_DEBUG__
-                pr_warn("tsn_fill_metadata failed\n");
+		pr_warn("tsn_fill_metadata failed\n");
 #endif
-                netif_wake_subqueue(ndev, q);
-                return NETDEV_TX_BUSY;
-        }
+		netif_wake_subqueue(ndev, q);
+		return NETDEV_TX_BUSY;
+	}
+
+	/* FRER (802.1CB): Insert R-TAG if stream is configured for sequence generation */
+	if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
+		struct ethhdr *eth = (struct ethhdr *)(tx_buffer->data);
+		struct frer_stream *stream;
+		unsigned long frer_flags;
+		
+		spin_lock_irqsave(&xdev->tsn_config.frer->lock, frer_flags);
+		stream = frer_stream_lookup(xdev->tsn_config.frer, 
+					    eth->h_source, eth->h_dest);
+		if (stream && stream->seq_gen.active) {
+			if (frer_insert_rtag(skb, stream) < 0) {
+				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+#ifdef __LIBXDMA_DEBUG__
+				pr_warn("FRER: R-TAG insertion failed\n");
+#endif
+				netif_wake_subqueue(ndev, q);
+				dev_kfree_skb(skb);
+				return NETDEV_TX_OK;
+			}
+			/* Update frame length after R-TAG insertion */
+			tx_metadata->frame_length += FRER_RTAG_SIZE;
+		}
+		spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+	}
 
         xdma_debug("0x%08x  0x%08x  0x%08x  %4d  %1d",
                 sys_count_lower, tx_metadata->from.tick, tx_metadata->to.tick,
@@ -290,15 +315,100 @@ static int xdma_set_ts_config(struct net_device *ndev, struct ifreq *ifr) {
         return copy_from_user(config, ifr->ifr_data, sizeof(*config)) ? -EFAULT : 0;
 }
 
+static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr) {
+	struct xdma_private *priv = netdev_priv(ndev);
+	struct xdma_dev *xdev = priv->xdev;
+	struct frer_stream_config config;
+
+	if (!xdev->tsn_config.frer) {
+		return -ENODEV;
+	}
+
+	if (copy_from_user(&config, ifr->ifr_data, sizeof(config))) {
+		return -EFAULT;
+	}
+
+	return frer_add_stream(xdev->tsn_config.frer, &config);
+}
+
+static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr) {
+	struct xdma_private *priv = netdev_priv(ndev);
+	struct xdma_dev *xdev = priv->xdev;
+	struct frer_stream_id id;
+
+	if (!xdev->tsn_config.frer) {
+		return -ENODEV;
+	}
+
+	if (copy_from_user(&id, ifr->ifr_data, sizeof(id))) {
+		return -EFAULT;
+	}
+
+	return frer_del_stream(xdev->tsn_config.frer, &id);
+}
+
+static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr) {
+	struct xdma_private *priv = netdev_priv(ndev);
+	struct xdma_dev *xdev = priv->xdev;
+	struct frer_stream_stats stats;
+	int ret;
+
+	if (!xdev->tsn_config.frer) {
+		return -ENODEV;
+	}
+
+	if (copy_from_user(&stats, ifr->ifr_data, sizeof(stats))) {
+		return -EFAULT;
+	}
+
+	ret = frer_get_stream_stats(xdev->tsn_config.frer, &stats);
+	if (ret) {
+		return ret;
+	}
+
+	if (copy_to_user(ifr->ifr_data, &stats, sizeof(stats))) {
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr) {
+	struct xdma_private *priv = netdev_priv(ndev);
+	struct xdma_dev *xdev = priv->xdev;
+	int enable;
+
+	if (!xdev->tsn_config.frer) {
+		return -ENODEV;
+	}
+
+	if (copy_from_user(&enable, ifr->ifr_data, sizeof(enable))) {
+		return -EFAULT;
+	}
+
+	xdev->tsn_config.frer->enabled = (enable != 0);
+	pr_info("FRER: %s\n", xdev->tsn_config.frer->enabled ? "enabled" : "disabled");
+
+	return 0;
+}
+
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd) {
-        switch (cmd) {
-        case SIOCGHWTSTAMP:
-                return xdma_get_ts_config(ndev, ifr);
-        case SIOCSHWTSTAMP:
-                return xdma_set_ts_config(ndev, ifr);
-        default:
-                return -EOPNOTSUPP;
-        }
+	switch (cmd) {
+	case SIOCGHWTSTAMP:
+		return xdma_get_ts_config(ndev, ifr);
+	case SIOCSHWTSTAMP:
+		return xdma_set_ts_config(ndev, ifr);
+	case SIOC_FRER_ADD_STREAM:
+		return frer_ioctl_add_stream(ndev, ifr);
+	case SIOC_FRER_DEL_STREAM:
+		return frer_ioctl_del_stream(ndev, ifr);
+	case SIOC_FRER_GET_STATS:
+		return frer_ioctl_get_stats(ndev, ifr);
+	case SIOC_FRER_ENABLE:
+		return frer_ioctl_enable(ndev, ifr);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static void do_tx_work(struct work_struct *work, u16 tstamp_id) {

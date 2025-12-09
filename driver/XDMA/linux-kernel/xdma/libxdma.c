@@ -34,6 +34,7 @@
 #include "xdma_thread.h"
 #include "xdma_netdev.h"
 #include "tsn.h"
+#include "frer.h"
 
 
 #ifdef __LIBXDMA_DEBUG__
@@ -1487,6 +1488,22 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
 		}
 		skb->dev = ndev;
+
+		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
+		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
+			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer);
+			if (frer_result == FRER_DROP_DUPLICATE || 
+			    frer_result == FRER_DROP_OUT_OF_WINDOW) {
+				/* Duplicate or out-of-window frame detected, drop it */
+				dev_kfree_skb(skb);
+				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+				iowrite32(DMA_ENGINE_START, &engine->regs->control);
+				spin_unlock_irqrestore(&priv->rx_lock, flag);
+				return IRQ_HANDLED;
+			}
+		}
+
 		skb->protocol = eth_type_trans(skb, ndev);
 
 		/* Transfer the skb to the Linux network stack */
@@ -1915,8 +1932,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 		rv = pci_enable_msix(pdev, xdev->entry, req_nvec);
 #endif
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI-X mode: %d\n", rv);
+		}
 
 		xdev->msix_enabled = 1;
 
@@ -1925,8 +1943,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 		/* enable message signalled interrupts */
 		dbg_init("pci_enable_msi()\n");
 		rv = pci_enable_msi(pdev);
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI mode: %d\n", rv);
+		}
 		xdev->msi_enabled = 1;
 
 	} else {
@@ -2186,10 +2205,11 @@ static int irq_msi_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, 0, xdev->mod_name, xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2227,10 +2247,11 @@ static int irq_legacy_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, IRQF_SHARED, xdev->mod_name,
 			 xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2697,12 +2718,13 @@ struct xdma_transfer *engine_cyclic_stop(struct xdma_engine *engine)
 		}
 
 		if (transfer->cyclic) {
-			if (engine->xdma_perf)
+			if (engine->xdma_perf) {
 				dbg_perf("Stopping perf transfer on %s\n",
 					 engine->name);
-			else
+			} else {
 				dbg_perf("Stopping cyclic transfer on %s\n",
 					 engine->name);
+			}
 			/* free up the buffer allocated for perf run */
 			if (engine->perf_buf_virt)
 				dma_free_coherent(&engine->xdev->pdev->dev,

@@ -11,6 +11,7 @@ typedef uint32_t u32
 
 #include <linux/pci.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/hashtable.h>
 #include <net/pkt_sched.h>
 
 #define REG_NEXT_PULSE_AT_HI 0x02a8
@@ -67,6 +68,10 @@ typedef uint32_t u32
 #define TC_COUNT 8
 #define TSN_PRIO_COUNT 8
 #define MAX_QBV_SLOTS 20
+
+/* FRER (802.1CB) configuration limits */
+#define MAX_FRER_STREAMS 64
+#define FRER_HASH_BITS 6
 
 #define ETHERNET_GAP_SIZE (8 + 4 + 12) // 8 bytes preamble, 4 bytes FCS, 12 bytes interpacket gap
 #define PHY_DELAY_CLOCKS 13 // 14 clocks from MAC to PHY, but sometimes there is 1 tick error
@@ -132,6 +137,9 @@ struct qav_state {
 	timestamp_t available_at;
 };
 
+/* FRER (802.1CB) configuration - forward declaration */
+struct frer_config;
+
 struct tsn_config {
 	struct qbv_config qbv;
 	struct qbv_baked_config qbv_baked;
@@ -139,6 +147,9 @@ struct tsn_config {
 	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
+	
+	/* FRER (802.1CB) configuration */
+	struct frer_config *frer;
 };
 
 u32 read32(void * addr);

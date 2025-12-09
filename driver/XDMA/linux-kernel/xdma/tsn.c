@@ -1,11 +1,13 @@
 #include <linux/if_ether.h>
 #include <linux/string.h>
+#include <linux/slab.h>
 
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
 #include "xdma_netdev.h"
 #include "libxdma.h"
 #include "tsn.h"
+#include "frer.h"
 
 #define NS_IN_1S 1000000000
 
@@ -198,12 +200,32 @@ void tsn_init_configs(struct pci_dev* pdev) {
 		config->qav[0].send_slope = -90;
 	}
 
+	// Initialize FRER (802.1CB) configuration
+	config->frer = kzalloc(sizeof(struct frer_config), GFP_KERNEL);
+	if (config->frer) {
+		frer_init(config->frer);
+		pr_info("FRER (802.1CB) initialized\n");
+	} else {
+		pr_warn("Failed to allocate FRER configuration\n");
+	}
+
 	bake_qos_config(config);
 }
 
+void tsn_cleanup_configs(struct pci_dev* pdev) {
+	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	struct tsn_config* config = &xdev->tsn_config;
+
+	if (config->frer) {
+		frer_cleanup(config->frer);
+		kfree(config->frer);
+		config->frer = NULL;
+		pr_info("FRER (802.1CB) cleanup complete\n");
+	}
+}
+
 static void bake_qos_config(struct tsn_config* config) {
-	int slot_id, tc_id; // Iterators
-	bool qav_disabled = true;
+	int slot_id, tc_id;
 	struct qbv_baked_config* baked;
 	// if (config->qbv.enabled == false) {
 	// 	// TODO: remove this when throughput issue without QoS gets resolved

@@ -35,3 +35,11 @@ path = "src/bin/latency.rs"
 [[bin]]
 name = "throughput"
 path = "src/bin/throughput.rs"
+
+[[bin]]
+name = "frer_example"
+path = "src/bin/frer_example.rs"
+
+[lib]
+name = "tsn_sdk"
+path = "src/lib.rs"

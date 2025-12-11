@@ -194,6 +194,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         tx_metadata->frame_length = frame_length;
         tx_metadata->timestamp_id = TEST_TIMESTAMP_ID;
         tx_metadata->fail_policy = TEST_FAIL_POLICY;
+        eth_hdr = (struct ethhdr*)(tx_buffer->data);
+        eth_hdr->h_proto = htons(0x0521);  // Ethertype from tsn-app
 
 //         /* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
 //         if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {

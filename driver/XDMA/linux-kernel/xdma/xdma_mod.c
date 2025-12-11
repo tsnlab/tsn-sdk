@@ -281,6 +281,7 @@ static void xdma_register_work(struct work_struct *work) {
 	}
 
 	priv->last_printed = now;
+	pr_info("\n\n\n\n");
 	pr_info("FPGA Running Time => %02u : %02u : %02u\n\n", REG_HI(76), REG_LO(76), REG_HI(77));
 	pr_info("// General System Information\n");
 	pr_info("   1. System Count (Host) (hi)     : %u\n", REG_HI(82));

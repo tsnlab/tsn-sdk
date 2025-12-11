@@ -14,10 +14,15 @@
 
 #define if_name "eth1"
 #define TEST_ETHERTYPE 0xeeee
-#define FRAME_LENGTH 1500
 
 int main(int argc, char *argv[])
 {
+    if (argc != 2) {
+        printf("Usage: %s <frame_length>\n", argv[0]);
+        return 1;
+    }
+
+    uint16_t frame_length = atoi(argv[1]);
     int sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (sockfd == -1) {
         perror("socket error");
@@ -48,7 +53,7 @@ int main(int argc, char *argv[])
     addr.sll_addr[4] = 0xa5;
     addr.sll_addr[5] = 0xa6;
 
-    unsigned char frame[FRAME_LENGTH];
+    unsigned char frame[1600];
     memset(frame, 0, sizeof(frame));
 
     struct ether_header *eh = (struct ether_header *)frame;
@@ -69,7 +74,7 @@ int main(int argc, char *argv[])
 
     eh->ether_type = htons(TEST_ETHERTYPE);
 
-    for (int i = 0; i < FRAME_LENGTH - ETH_HLEN; i++) {
+    for (int i = 0; i < frame_length - ETH_HLEN; i++) {
         switch (i % 6) {
             case 0:
                 frame[ETH_HLEN + i] = 0xaa;
@@ -96,12 +101,12 @@ int main(int argc, char *argv[])
         }
     }
 
-    frame[FRAME_LENGTH - 2] = 0xca;
-    frame[FRAME_LENGTH - 1] = 0xfe;
+    frame[frame_length - 2] = 0xca;
+    frame[frame_length - 1] = 0xfe;
 
     ssize_t sent = sendto(sockfd,
                           frame,
-                          FRAME_LENGTH,
+                          frame_length,
                           0,
                           (struct sockaddr *)&addr,
                           sizeof(addr));

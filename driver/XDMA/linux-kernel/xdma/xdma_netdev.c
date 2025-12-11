@@ -109,6 +109,8 @@ int xdma_netdev_close(struct net_device *ndev)
 }
 
 #define TEST_ETHERTYPE 0xeeee
+#define TEST_TIMESTAMP_ID 3
+#define TEST_FAIL_POLICY 1
 
 netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 struct net_device *ndev)
@@ -183,16 +185,25 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         sys_count_lower = sys_count & LOWER_29_BITS;
         sys_count_upper = sys_count & ~LOWER_29_BITS;
 
+        // Borrowed from app1_tx_frame_contruct (tx-timestamp-debug branch)
 
-        /* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
-        if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {
-                // TODO: Increment SW drop stats
-#ifdef __LIBXDMA_DEBUG__
-                pr_warn("tsn_fill_metadata failed\n");
-#endif
-                netif_wake_subqueue(ndev, q);
-                return NETDEV_TX_BUSY;
-        }
+        *((uint32_t*)&tx_metadata->from) = 0;
+        *((uint32_t*)&tx_metadata->to) = 0xffffffff;
+        *((uint32_t*)&tx_metadata->delay_from) = 0x55555555;
+        *((uint32_t*)&tx_metadata->delay_to) = 0x77777777;
+        tx_metadata->frame_length = frame_length;
+        tx_metadata->timestamp_id = TEST_TIMESTAMP_ID;
+        tx_metadata->fail_policy = TEST_FAIL_POLICY;
+
+//         /* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
+//         if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {
+//                 // TODO: Increment SW drop stats
+// #ifdef __LIBXDMA_DEBUG__
+//                 pr_warn("tsn_fill_metadata failed\n");
+// #endif
+//                 netif_wake_subqueue(ndev, q);
+//                 return NETDEV_TX_BUSY;
+//         }
 
         xdma_debug("0x%08x  0x%08x  0x%08x  %4d  %1d",
                 sys_count_lower, tx_metadata->from.tick, tx_metadata->to.tick,

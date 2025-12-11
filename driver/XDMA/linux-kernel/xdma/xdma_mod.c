@@ -276,7 +276,7 @@ static void xdma_register_work(struct work_struct *work) {
 	struct xdma_private *priv = container_of(work, struct xdma_private, register_work);
 	struct xdma_dev *xdev = priv->xdev;
 	uint64_t now = ktime_get_ns();
-	if (now - priv->last_printed < 100000000) {
+	if (now - priv->last_printed < PRINT_REG_INTERVAL_NS) {
 		goto work_end;
 	}
 

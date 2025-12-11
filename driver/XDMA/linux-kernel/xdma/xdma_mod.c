@@ -268,6 +268,75 @@ static const struct ethtool_ops xdma_ethtool_ops = {
 	.get_link_ksettings = xdma_ethtool_get_link_ksettings,
 };
 
+#define PRINT_REG_INTERVAL_NS (100000000)
+#define REG_HI(n) (read32(xdev->bar[0] + (0x1000 + 4 * (2 * n - 2))))
+#define REG_LO(n) (read32(xdev->bar[0] + (0x1000 + 4 * (2 * n - 1))))
+
+static void xdma_register_work(struct work_struct *work) {
+	struct xdma_private *priv = container_of(work, struct xdma_private, register_work);
+	struct xdma_dev *xdev = priv->xdev;
+	uint64_t now = ktime_get_ns();
+	if (now - priv->last_printed < 100000000) {
+		goto work_end;
+	}
+
+	priv->last_printed = now;
+	pr_info("FPGA Running Time => %02u : %02u : %02u\n\n", REG_HI(76), REG_LO(76), REG_HI(77));
+	pr_info("// General System Information\n");
+	pr_info("   1. System Count (Host) (hi)     : %u\n", REG_HI(82));
+	pr_info("      System Count (Host) (lo)     : %u\n", REG_LO(82));
+	pr_info("   2. System Count (Tx)   (hi)     : %u\n", REG_HI(79));
+	pr_info("      System Count (Tx)   (lo)     : %u\n", REG_LO(79));
+	pr_info("   3. System Count (Rx)   (hi)     : %u\n", REG_HI(78));
+	pr_info("      System Count (Rx)   (lo)     : %u\n", REG_LO(78));
+	pr_info("   4. TSN System Info     (hi)     : %u\n", REG_HI(80));
+	pr_info("      TSN System Info     (lo)     : %u\n", REG_LO(80));
+	pr_info("\n\n");
+
+	pr_info("// TSN Tx Information\n");
+	pr_info("   1. Buffer Write Status 1 (hi)  : %u\n", REG_HI(42));
+	pr_info("      Buffer Write Status 1 (lo)  : %u\n", REG_LO(42));
+	pr_info("   2. Address FIFO Data Count (hi)  : %u\n", REG_HI(45));
+	pr_info("      Address FIFO Data Count (lo)  : %u\n", REG_LO(45));
+	pr_info("   3. Tx Tstamp 1 (hi)     : %u\n", REG_HI(60));
+	pr_info("      Tx Tstamp 1 (lo)     : %u\n", REG_LO(60));
+	pr_info("      Tx Tstamp 2 (hi)     : %u\n", REG_HI(61));
+	pr_info("      Tx Tstamp 2 (lo)     : %u\n", REG_LO(61));
+	pr_info("      Tx Tstamp 3 (hi)     : %u\n", REG_HI(62));
+	pr_info("      Tx Tstamp 3 (lo)     : %u\n", REG_LO(62));
+	pr_info("      Tx Tstamp 4 (hi)     : %u\n", REG_HI(63));
+	pr_info("      Tx Tstamp 4 (lo)     : %u\n", REG_LO(63));
+	pr_info("\n");
+
+	pr_info("   4. FS Total Rx Frame Count (hi)     : %u\n", REG_HI(24));
+	pr_info("      FS Total Rx Frame Count (lo)     : %u\n", REG_LO(24));
+	pr_info("\n");
+
+	pr_info("   5. FSCH Total New Entry Count   (hi)  : %u\n", REG_HI(37));
+	pr_info("      FSCH Total New Entry Count   (lo)  : %u\n", REG_LO(37));
+	pr_info("      FSCH Total Valid Entry Count (hi)  : %u\n", REG_HI(38));
+	pr_info("      FSCH Total Valid Entry Count (lo)  : %u\n", REG_LO(38));
+	pr_info("      FSCH Total Delay Entry Count (hi)  : %u\n", REG_HI(39));
+	pr_info("      FSCH Total Delay Entry Count (lo)  : %u\n", REG_LO(39));
+	pr_info("      FSCH Total Drop Entry Count  (hi)  : %u\n", REG_HI(40));
+	pr_info("      FSCH Total Drop Entry Count  (lo)  : %u\n", REG_LO(40));
+	pr_info("\n");
+
+	pr_info("// TSN Rx Information\n");
+	pr_info("   1. Rx Tstamp (hi)     : %u\n", REG_HI(1));
+	pr_info("      Rx Tstamp (lo)     : %u\n", REG_LO(1));
+	pr_info("\n");
+
+	pr_info("   2. FD Total Rx Frame Count (hi) : %u\n", REG_HI(4));
+	pr_info("      FD Total Rx Frame Count (lo) : %u\n", REG_LO(4));
+	pr_info("\n");
+
+work_end:
+	if (priv->run_register_work) {
+		schedule_work(&priv->register_work);
+	}
+}
+
 static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	int rv = 0;
@@ -441,6 +510,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
+	INIT_WORK(&priv->register_work, xdma_register_work);
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);
 	if (!ptp_data) {
@@ -461,6 +531,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	channel_interrupts_enable(xdev, ~0);
 	//netif_stop_queue(ndev);
+	priv->run_register_work = true;
+	schedule_work(&priv->register_work);
 	return 0;
 
 err_out:
@@ -493,6 +565,7 @@ static void remove_one(struct pci_dev *pdev)
 		return;
 	}
 	priv = netdev_priv(ndev);
+	priv->run_register_work = false;
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);

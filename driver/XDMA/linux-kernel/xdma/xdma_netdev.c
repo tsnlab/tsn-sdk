@@ -108,6 +108,8 @@ int xdma_netdev_close(struct net_device *ndev)
         return 0;
 }
 
+#define TEST_ETHERTYPE 0xeeee
+
 netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 struct net_device *ndev)
 {
@@ -123,6 +125,12 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         u32 to_value;
         u16 q;
 
+        struct ethhdr *eth_hdr = (struct ethhdr*)(skb->data);
+        if (ntohs(eth_hdr->h_proto) != TEST_ETHERTYPE) {
+                netif_wake_subqueue(ndev, q);
+                dev_kfree_skb(skb);
+                return NETDEV_TX_OK;
+        }
 
         /* Check desc count */
         q = skb_get_queue_mapping(skb);
@@ -162,6 +170,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         }
         skb_push(skb, TX_METADATA_SIZE);
         memset(skb->data, 0, TX_METADATA_SIZE);
+
 
         xdma_debug("skb->len : %d\n", skb->len);
         tx_buffer = (struct tx_buffer*)skb->data;

@@ -291,8 +291,7 @@ static void xdma_register_work(struct work_struct *work) {
 	pr_info("   3. System Count (Rx)   (hi)     : %u\n", REG_HI(78));
 	pr_info("      System Count (Rx)   (lo)     : %u\n", REG_LO(78));
 	pr_info("   4. TSN System Info     (hi)     : %u\n", REG_HI(80));
-	pr_info("      TSN System Info     (lo)     : %u\n", REG_LO(80));
-	pr_info("\n\n");
+	pr_info("      TSN System Info     (lo)     : %u\n\n", REG_LO(80));
 
 	pr_info("// TSN Tx Information\n");
 	pr_info("   1. Buffer Write Status 1 (hi)  : %u\n", REG_HI(42));
@@ -306,12 +305,10 @@ static void xdma_register_work(struct work_struct *work) {
 	pr_info("      Tx Tstamp 3 (hi)     : %u\n", REG_HI(62));
 	pr_info("      Tx Tstamp 3 (lo)     : %u\n", REG_LO(62));
 	pr_info("      Tx Tstamp 4 (hi)     : %u\n", REG_HI(63));
-	pr_info("      Tx Tstamp 4 (lo)     : %u\n", REG_LO(63));
-	pr_info("\n");
+	pr_info("      Tx Tstamp 4 (lo)     : %u\n\n", REG_LO(63));
 
 	pr_info("   4. FS Total Rx Frame Count (hi)     : %u\n", REG_HI(24));
-	pr_info("      FS Total Rx Frame Count (lo)     : %u\n", REG_LO(24));
-	pr_info("\n");
+	pr_info("      FS Total Rx Frame Count (lo)     : %u\n\n", REG_LO(24));
 
 	pr_info("   5. FSCH Total New Entry Count   (hi)  : %u\n", REG_HI(37));
 	pr_info("      FSCH Total New Entry Count   (lo)  : %u\n", REG_LO(37));
@@ -320,17 +317,14 @@ static void xdma_register_work(struct work_struct *work) {
 	pr_info("      FSCH Total Delay Entry Count (hi)  : %u\n", REG_HI(39));
 	pr_info("      FSCH Total Delay Entry Count (lo)  : %u\n", REG_LO(39));
 	pr_info("      FSCH Total Drop Entry Count  (hi)  : %u\n", REG_HI(40));
-	pr_info("      FSCH Total Drop Entry Count  (lo)  : %u\n", REG_LO(40));
-	pr_info("\n");
+	pr_info("      FSCH Total Drop Entry Count  (lo)  : %u\n\n", REG_LO(40));
 
 	pr_info("// TSN Rx Information\n");
 	pr_info("   1. Rx Tstamp (hi)     : %u\n", REG_HI(1));
-	pr_info("      Rx Tstamp (lo)     : %u\n", REG_LO(1));
-	pr_info("\n");
+	pr_info("      Rx Tstamp (lo)     : %u\n\n", REG_LO(1));
 
 	pr_info("   2. FD Total Rx Frame Count (hi) : %u\n", REG_HI(4));
-	pr_info("      FD Total Rx Frame Count (lo) : %u\n", REG_LO(4));
-	pr_info("\n");
+	pr_info("      FD Total Rx Frame Count (lo) : %u\n\n", REG_LO(4));
 
 work_end:
 	if (priv->run_register_work) {

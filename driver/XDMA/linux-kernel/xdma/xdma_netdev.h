@@ -10,6 +10,7 @@
 #include <linux/net_tstamp.h>
 
 #include "xdma_mod.h"
+#include "xdma_tx_ring.h"
 
 #define DESC_REG_LO (SGDMA_OFFSET_FROM_CHANNEL + 0x80)
 #define DESC_REG_HI (SGDMA_OFFSET_FROM_CHANNEL + 0x84)
@@ -62,6 +63,10 @@ struct xdma_private {
         int irq;
         int rx_count;
 
+    /* NAPI */
+    struct napi_struct napi;
+    bool napi_enabled;
+
         struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
         struct sk_buff *tx_work_skb[TSN_TIMESTAMP_ID_MAX];
         sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];
@@ -77,6 +82,22 @@ struct xdma_private {
         uint64_t last_to_overflow_timeout;
 
         unsigned long state;
+
+    bool b_stop_rx_polling;
+    bool b_stopped_rx_polling;
+
+    /* RX/TX completion state flags */
+    bool rx_pending;    /* set when RX DMA interrupt triggers */
+    u32 last_tx_status; /* set when TX DMA interrupt triggers */
+    u32 last_rx_status; /* set when RX DMA interrupt triggers */
+
+    /* XDMA TX Ring
+     * A fixed DMA-coherent buffer ring used to eliminate
+     * dma_map_single()/dma_unmap_single() race conditions and
+     * prevent memory corruption.
+     * All TX data is memcpy'ed into ring slots before DMA submission.
+     */
+    struct xdma_tx_ring tx_ring;
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)
@@ -167,5 +188,9 @@ void xdma_tx_work1(struct work_struct *work);
 void xdma_tx_work2(struct work_struct *work);
 void xdma_tx_work3(struct work_struct *work);
 void xdma_tx_work4(struct work_struct *work);
+/* NAPI poll control */
+int xdma_napi_poll(struct napi_struct* napi, int budget);
+void xdma_enable_napi(struct xdma_private* priv);
+void xdma_disable_napi(struct xdma_private* priv);
 
 #endif

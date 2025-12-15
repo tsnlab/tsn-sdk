@@ -287,7 +287,7 @@ void channel_interrupts_disable(struct xdma_dev *xdev, u32 mask)
 }
 
 /* user_interrupts_enable -- Enable interrupts we are interested in */
-static void user_interrupts_enable(struct xdma_dev *xdev, u32 mask)
+void user_interrupts_enable(struct xdma_dev *xdev, u32 mask)
 {
 	struct interrupt_regs *reg =
 		(struct interrupt_regs *)(xdev->bar[xdev->config_bar_idx] +
@@ -297,7 +297,7 @@ static void user_interrupts_enable(struct xdma_dev *xdev, u32 mask)
 }
 
 /* user_interrupts_disable -- Disable interrupts we not interested in */
-static void user_interrupts_disable(struct xdma_dev *xdev, u32 mask)
+void user_interrupts_disable(struct xdma_dev *xdev, u32 mask)
 {
 	struct interrupt_regs *reg =
 		(struct interrupt_regs *)(xdev->bar[xdev->config_bar_idx] +
@@ -1392,135 +1392,165 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 	}
 }
 
-/*
- * xdma_isr() - Interrupt handler
- *
- * @dev_id pointer to xdma_dev
- */
-static irqreturn_t xdma_isr(int irq, void *dev_id)
+/* ============================================================
+ * RX ISR handles only C2H (device -> host) engine interrupt
+ * ============================================================ */
+static void xdma_isr_rx(struct xdma_dev* xdev, struct xdma_private* priv, u32 ch_irq)
 {
-	u32 ch_irq;
-	u32 mask;
-	u16 q;
-	int skb_len;
-	unsigned long flag;
-	struct interrupt_regs *irq_regs;
-	struct net_device *ndev;
-	struct sk_buff *skb;
-	struct xdma_dev *xdev;
-	struct xdma_engine *engine;
-	struct xdma_private *priv;
-	struct xdma_result *result;
-	struct rx_buffer *rx_buffer;
+    struct xdma_engine* engine;
+    struct xdma_result* result;
+    struct rx_buffer* rx_buffer;
+    unsigned long flag;
+    u32 mask;
+    int skb_len;
 
-	dbg_irq("(irq=%d, dev 0x%p) <<<< ISR.\n", irq, dev_id);
-	if (!dev_id) {
-		pr_err("Invalid dev_id on irq line %d\n", irq);
-		return -IRQ_NONE;
-	}
+    /* Check C2H mask */
+    mask = ch_irq & xdev->mask_irq_c2h;
+    if (!mask)
+        return;
 
-	xdev = (struct xdma_dev *)dev_id;
-	if (!xdev) {
-		WARN_ON(!xdev);
-		dbg_irq("%s(irq=%d) xdev=%p ??\n", __func__, irq, xdev);
-		return IRQ_NONE;
-	}
+    engine = &xdev->engine_c2h[0];
+    result = priv->res;
+    rx_buffer = (struct rx_buffer*)priv->rx_buffer;
 
+    spin_lock_irqsave(&priv->rx_lock, flag);
 
-	irq_regs = (struct interrupt_regs *)(xdev->bar[xdev->config_bar_idx] +
-					     XDMA_OFS_INT_CTRL);
+    /* Read DMA status (debug only) */
+    u32 status_rx = ioread32(&engine->regs->status);
+    WRITE_ONCE(priv->last_rx_status, status_rx);
+    // pr_info("[ISR][RX] DMA status=0x%x\n", status);
 
-	/* read channel interrupt requests */
-	ch_irq = read_register(&irq_regs->channel_int_request);
-	dbg_irq("ch_irq = 0x%08x\n", ch_irq);
+    /* Extract packet length excluding metadata and CRC */
+    skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
+    if (skb_len <= 0 || skb_len > ETH_FRAME_LEN)
+	{
+        pr_warn("[ISR][RX] Invalid skb_len=%d (result->length=%d)\n", skb_len, result->length);
+        priv->rx_pending = false;
+        spin_unlock_irqrestore(&priv->rx_lock, flag);
+        goto rx_restart;
+    }
 
-	/*
-	 * disable all interrupts that fired; these are re-enabled individually
-	 * after the causing module has been fully serviced.
-	 */
-	if (ch_irq)
-		channel_interrupts_disable(xdev, ch_irq);
+    /* Stop RX DMA temporarily before handing data to NAPI */
+    iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 
-	ndev = xdev->ndev;
-	if (!ndev) {
-		pr_err("Invalid net device\n");
-		return IRQ_NONE;
-	}
+    /* Valid packet ? schedule NAPI for RX handling */
+    priv->rx_pending = true;
+    if (!test_bit(NAPI_STATE_SCHED, &priv->napi.state) && likely(napi_schedule_prep(&priv->napi)))
+	{
+        __napi_schedule(&priv->napi);
+        // pr_info("[ISR][RX] NAPI scheduled (len=%d)\n", skb_len);
+    } else {
+        // pr_info("[ISR][RX] NAPI already running\n");
+    }
 
-	priv = netdev_priv(ndev);
-	mask = ch_irq & xdev->mask_irq_c2h;
-	if (mask) {
-		dbg_info("xdma_isr c2h");
-		engine = &xdev->engine_c2h[0];
-		result = priv->res;
-		rx_buffer = (struct rx_buffer*)priv->rx_buffer;
+    spin_unlock_irqrestore(&priv->rx_lock, flag);
+    return;
 
-#ifdef __LIBXDMA_DEBUG__
-		assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
-#endif
-		spin_lock_irqsave(&priv->rx_lock, flag);
-		engine_status_read(engine, 1, 0);
-		// skb_len = rx_buffer->metadata.frame_length - CRC_LEN;
-		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
-		if (skb_len < 0) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Invalid skb_len\n");
-			return IRQ_NONE;
-		}
-		skb = dev_alloc_skb(skb_len);
-		if (!skb) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Failed to allocate skb\n");
-			return IRQ_NONE;
-		}
-		memcpy(
-			skb_put(skb, skb_len),
-			priv->rx_buffer + RX_METADATA_SIZE,
-			skb_len);
-		if (filter_rx_timestamp(priv, skb)) {
-			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
-		}
-		skb->dev = ndev;
-		skb->protocol = eth_type_trans(skb, ndev);
+rx_restart:
+    /* Restart RX DMA engine after invalid packet or error */
+    iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+    channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+    iowrite32(DMA_ENGINE_START, &engine->regs->control);
+    pr_info("[ISR][RX] RX DMA restarted\n");
+}
 
-		/* Transfer the skb to the Linux network stack */
-		netif_rx(skb);
+/* ============================================================
+ * TX ISR handles only H2C (host -> device) engine interrupt
+ * ============================================================ */
+static void xdma_isr_tx(struct xdma_dev* xdev, struct xdma_private* priv, u32 ch_irq)
+{
+    struct xdma_engine* engine;
+    u32 mask;
+    u32 status_tx;
 
-		/* Stop the engine */
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+    /* Check H2C mask */
+    mask = ch_irq & xdev->mask_irq_h2c;
+    if (!mask)
+        return;
 
-		/* Start the engine */
-		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-		iowrite32(DMA_ENGINE_START, &engine->regs->control);
-		spin_unlock_irqrestore(&priv->rx_lock, flag);
-	}
+    engine = &xdev->engine_h2c[0];
 
-	mask = ch_irq & xdev->mask_irq_h2c;
-	if (mask) {
-		dbg_info("xdma_isr h2c");
-		engine = &xdev->engine_h2c[0];
+    /* Read and clear DMA status to acknowledge IRQ */
+    status_tx = ioread32(&engine->regs->status);
 
-		engine_status_read(engine, 1, 0);
+    /* Store latest status for debug or troubleshooting */
+    WRITE_ONCE(priv->last_tx_status, status_tx);
 
-		q = skb_get_queue_mapping(priv->tx_skb);
+    // pr_info("[ISR][TX] interrupt detected (mask=0x%x, status=0x%x)\n", mask, status_tx);
 
-		/* Free last resource */
-		dma_unmap_single(&xdev->pdev->dev, priv->tx_dma_addr, priv->tx_skb->len, DMA_TO_DEVICE);
-		dev_kfree_skb_any(priv->tx_skb);
-		priv->tx_skb = NULL;
+    if (status_tx & XDMA_STAT_DESC_COMPLETED)
+	{
+        /* Clear completion + busy bits */
+        iowrite32(XDMA_STAT_DESC_COMPLETED | XDMA_STAT_BUSY, &engine->regs->status_rc);
 
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-		netif_wake_subqueue(ndev, q);
-		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-	}
-	xdev->irq_count++;
-	return IRQ_HANDLED;
+        /* Schedule NAPI for TX cleanup */
+        if (!test_bit(NAPI_STATE_SCHED, &priv->napi.state) && likely(napi_schedule_prep(&priv->napi))) {
+            __napi_schedule(&priv->napi);
+            // pr_info("[ISR][TX] NAPI scheduled for TX cleanup\n");
+        } else {
+            // pr_info("[ISR][TX] NAPI already scheduled\n");
+        }
+    }
+}
+
+/* ============================================================
+ * MAIN ISR dispatches RX and TX handlers
+ * ============================================================ */
+static irqreturn_t xdma_isr(int irq, void* dev_id)
+{
+    struct xdma_dev* xdev = (struct xdma_dev*)dev_id;
+    struct interrupt_regs* irq_regs;
+    struct xdma_private* priv;
+    struct net_device* ndev;
+    u32 ch_irq;
+
+    /* ========================= BASIC CHECK ========================= */
+    if (unlikely(!xdev)) {
+        pr_err("[ISR] Invalid xdev pointer\n");
+        return IRQ_NONE;
+    }
+
+    // pr_info("xdma_isr\n");
+
+    irq_regs = (struct interrupt_regs*)(xdev->bar[xdev->config_bar_idx] + XDMA_OFS_INT_CTRL);
+
+    /* ========================= READ IRQ REQUEST ========================= */
+    ch_irq = read_register(&irq_regs->channel_int_request);
+    if (!ch_irq)
+        return IRQ_NONE;
+
+    /* Disable interrupt sources until ISR completes */
+    channel_interrupts_disable(xdev, ch_irq);
+
+    ndev = xdev->ndev;
+    if (unlikely(!ndev))
+	{
+        pr_err("[ISR] Invalid net_device\n");
+        goto irq_enable_exit;
+    }
+
+    priv = netdev_priv(ndev);
+    if (unlikely(!priv))
+	{
+        pr_err("[ISR] Invalid priv pointer\n");
+        goto irq_enable_exit;
+    }
+
+    // pr_info("[ISR] ch_irq=0x%x (mask_c2h=0x%x, mask_h2c=0x%x)\n", ch_irq, xdev->mask_irq_c2h, xdev->mask_irq_h2c);
+
+    /* ========================= RX PATH ========================= */
+    xdma_isr_rx(xdev, priv, ch_irq);
+
+    /* ========================= TX PATH ========================= */
+    xdma_isr_tx(xdev, priv, ch_irq);
+
+irq_enable_exit:
+    /* Re-enable interrupts for the serviced channels */
+    channel_interrupts_enable(xdev, ch_irq);
+    xdev->irq_count++;
+    // pr_info("[ISR] exit (irq_count=%u)\n", xdev->irq_count);
+
+    return IRQ_HANDLED;
 }
 
 /*

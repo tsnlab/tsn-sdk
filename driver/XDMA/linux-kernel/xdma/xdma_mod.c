@@ -389,6 +389,12 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	priv->rx_engine = &xdev->engine_c2h[0];
 	priv->tx_engine = &xdev->engine_h2c[0];
 
+	/* initialize NAPI structure */
+/* Maximum number of packets (work units) the NAPI poll may process	*/
+#define DEFAULT_BUDGET 64
+	netif_napi_add_weight(ndev, &priv->napi, xdma_napi_poll, DEFAULT_BUDGET);
+    priv->napi_enabled = false;
+
 	priv->tx_desc = dma_alloc_coherent(
 				&pdev->dev,
 				sizeof(struct xdma_desc),
@@ -459,6 +465,11 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		pr_err("register_netdev failed\n");
 		goto err_out;
 	}
+
+	/* disable irq to prevent crash with null of netdev */
+    disable_irq(pdev->irq);
+    pr_info("xdma: IRQ registered but temporarily disabled until netdev open()\n");
+
 	channel_interrupts_enable(xdev, ~0);
 	//netif_stop_queue(ndev);
 	return 0;
@@ -495,6 +506,14 @@ static void remove_one(struct pci_dev *pdev)
 	priv = netdev_priv(ndev);
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
+
+	/* remove napi poll structure */
+    if (priv && priv->napi_enabled) {
+        napi_disable(&priv->napi);
+        priv->napi_enabled = false;
+    }
+    netif_napi_del(&priv->napi);
+
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
 	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);

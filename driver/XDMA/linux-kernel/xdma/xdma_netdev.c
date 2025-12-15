@@ -15,6 +15,12 @@
 
 #define WORKAROUND_PAD 5
 
+/* Static function declarations */
+static int xdma_netdev_rx_poll(struct xdma_private* priv, int budget);
+static int xdma_process_rx_packet(struct xdma_private* priv);
+static void xdma_restart_rx_engine(struct xdma_private* priv);
+static void xdma_netdev_tx_complete(struct xdma_private* priv);
+
 static size_t workaround_packet_size(size_t size) {
 #ifdef __LIBXDMA_RPI__
         if (size >= 95 && size <= 99) {
@@ -60,6 +66,295 @@ void rx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
         desc->bytes = cpu_to_le32(len);
 }
 
+/* -------------------------------
+ * TX Complete
+ * ------------------------------- */
+static void xdma_netdev_tx_complete(struct xdma_private* priv)
+{
+        struct xdma_tx_ring* ring = &priv->tx_ring;
+        struct xdma_dev* xdev = priv->xdev;
+        struct xdma_engine* engine = &xdev->engine_h2c[0];
+        u32 tail = ring->tail;
+        struct xdma_tx_slot* slot = &ring->slot[tail];
+
+        /* Stop DMA */
+        iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+        //  pr_info("TX-COMPLETE: stop DMA, freeing slot[%u]\n", tail);
+
+        /* free the completed slot */
+        if (slot->skb)
+        {
+            napi_consume_skb(slot->skb, 1);
+            slot->skb = NULL;
+            slot->len = 0;
+        }
+        else
+        {
+            pr_err("TX-COMPLETE: slot[%u] skb NULL\n", tail);
+        }
+
+        /* advance tail */
+        ring->tail = (tail + 1) % XDMA_TX_RING_SIZE;
+        // pr_info("TX-COMPLETE: new tail=%u\n", ring->tail);
+}
+
+/* -------------------------------
+ * TX Polling Handler
+ * ------------------------------- */
+int xdma_netdev_tx_poll(struct xdma_private* priv, int budget)
+{
+        u32 status_tx;
+        int work_done = 0;
+
+        // pr_info("[TX_POLL] enter (budget=%d)\n", budget);
+
+        /* 1. Read DMA engine status (cached from ISR) */
+        status_tx = READ_ONCE(priv->last_tx_status);
+        // pr_info("[TX_POLL] DMA status=0x%x\n", status_tx);
+
+        udelay(10);
+
+        /* 2. Check descriptor completion */
+        if (status_tx & XDMA_STAT_DESC_COMPLETED)
+        {
+            /* 3. TX Complete */
+            xdma_netdev_tx_complete(priv);
+
+            WRITE_ONCE(priv->last_tx_status, 0);
+
+            // pr_info("[TX_POLL] TX complete (total=%llu, done=%u)\n", priv->total_tx_count, priv->tx_packets);
+
+            work_done = 1;
+            // pr_info("[TX_POLL] work_done = 1\n");
+        }
+
+        smp_wmb();
+
+        /* 4. Wake TX queue */
+        if (netif_queue_stopped(priv->ndev))
+        {
+            netif_wake_queue(priv->ndev);
+            // pr_warn("[TX_POLL] netif_wake_queue(priv->ndev)\n");
+        }
+
+        // pr_info("[TX_POLL] exit (work_done=%d)\n", work_done);
+        return work_done;
+}
+
+/* ------------------------------------------------------------------
+ * NAPI RX Poll Function
+ *  - Called when ISR schedules NAPI after RX descriptor complete
+ *  - Handles packet processing and safely restarts RX DMA engine
+ * ------------------------------------------------------------------ */
+static int xdma_netdev_rx_poll(struct xdma_private* priv, int budget)
+{
+        // struct xdma_engine* engine = priv->rx_engine;
+        struct xdma_engine* engine = &priv->xdev->engine_c2h[0];
+        struct xdma_result* result = priv->res;
+        int work_done = 0;
+        u32 status;
+
+        // pr_info("[RX_POLL] enter (budget=%d)\n", budget);
+
+        while (work_done < budget)
+        {
+            /* Stop flag check (e.g., device close) */
+            if (READ_ONCE(priv->b_stop_rx_polling))
+            {
+                // pr_info("[RX_POLL] stop flag detected, exiting loop\n");
+                break;
+            }
+
+            /* Read current DMA status */
+            status = ioread32(&engine->regs->status);
+            // pr_info("[RX_POLL] DMA status=0x%x\n", status);
+
+            /* Check software RX pending flag */
+            if (!READ_ONCE(priv->rx_pending))
+            {
+                pr_debug("[RX_POLL] no RX pending flag set\n");
+                break;
+            }
+
+            /* Clear RX pending before processing (avoid race) */
+            priv->rx_pending = false;
+
+            /* Process received packet */
+            // pr_info("[RX_POLL] descriptor completed ? process_rx_packet()\n");
+            xdma_process_rx_packet(priv);
+
+            /* Clear DMA completion status */
+            iowrite32(XDMA_STAT_DESC_COMPLETED | XDMA_STAT_BUSY, &engine->regs->status_rc);
+
+            /* Fully restart RX engine using helper */
+            xdma_restart_rx_engine(priv);
+            // pr_info("[RX_POLL] RX engine restarted\n");
+
+            work_done++;
+        }
+
+        // pr_info("[RX_POLL] exit (work_done=%d)\n", work_done);
+        return work_done;
+}
+
+static int xdma_process_rx_packet(struct xdma_private* priv)
+{
+        struct xdma_dev* xdev = priv->xdev;
+        struct net_device* ndev = priv->ndev;
+        struct sk_buff* skb;
+        struct xdma_result* result = priv->res;
+        int skb_len;
+
+        if (!xdev || !ndev)
+        {
+            pr_err("[RX_PROC] invalid device context\n");
+            return -EINVAL;
+        }
+
+        if (result->length <= 0)
+        {
+            pr_err("[RX_PROC] invalid skb_len=%d\n", result->length);
+            return -EINVAL;
+        }
+
+        if (result->length > XDMA_BUFFER_SIZE)
+        {
+            pr_err("[RX_PROC] result->length too large: %d (max %d)\n", result->length, XDMA_BUFFER_SIZE);
+            return -EINVAL;
+        }
+
+        skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
+        if (skb_len <= 0)
+        {
+            pr_err("[RX_PROC] invalid skb_len=%d (result->length=%d)\n", skb_len, result->length);
+            return -EINVAL;
+        }
+
+        if (skb_len > ETH_FRAME_LEN)
+        {
+            pr_err("[RX_PROC] skb_len too large: %d (result->length=%d)\n", skb_len, result->length);
+            return -EINVAL;
+        }
+
+        skb = dev_alloc_skb(skb_len);
+        if (!skb)
+        {
+            pr_err("[RX_PROC] skb allocation failed\n");
+            return -ENOMEM;
+        }
+
+        memcpy(skb_put(skb, skb_len), priv->rx_buffer + RX_METADATA_SIZE, skb_len);
+
+        skb->dev = ndev;
+        skb->protocol = eth_type_trans(skb, ndev);
+
+        netif_receive_skb(skb);
+
+        // pr_info("[RX_PROC] packet handed to network stack (len=%d)\n", skb_len);
+        return 0;
+}
+
+/* RX engine restart after completion */
+static void xdma_restart_rx_engine(struct xdma_private* priv)
+{
+        struct xdma_dev* xdev = priv->xdev;
+        struct xdma_engine* engine = &xdev->engine_c2h[0];
+        unsigned long flags;
+        u32 lo, hi;
+
+        spin_lock_irqsave(&priv->rx_lock, flags);
+
+        /* Reset rx buffer */
+        memset(priv->rx_buffer, 0, XDMA_BUFFER_SIZE);
+
+        /* RX desc set to receive next packet */
+        rx_desc_set(priv->rx_desc, priv->rx_dma_addr, XDMA_BUFFER_SIZE);
+
+        lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
+        iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
+
+        hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
+        iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
+
+        iowrite32(DMA_ENGINE_START, &engine->regs->control);
+
+        spin_unlock_irqrestore(&priv->rx_lock, flags);
+        // pr_info("[RX_RESTART] engine restarted (INT re-enabled)\n");
+}
+
+int xdma_napi_poll(struct napi_struct* napi, int budget)
+{
+        struct xdma_private* priv = container_of(napi, struct xdma_private, napi);
+        int work_done = 0;
+
+        struct xdma_dev* xdev = priv->xdev;
+
+        /* check network device validity */
+        if (unlikely(!priv || !xdev))
+        {
+            if (napi_complete_done(napi, 0)) {
+                // complete the abnormal calls during initialization
+            }
+            return 0;
+        }
+
+        u32 irq_mask = xdev->engine_c2h[0].irq_bitmask | xdev->engine_h2c[0].irq_bitmask;
+
+        /* RX first */
+        work_done = xdma_netdev_rx_poll(priv, budget);
+
+        /* TX only if remaining budget exists */
+        if (work_done < budget)
+        {
+            work_done += xdma_netdev_tx_poll(priv, budget - work_done);
+        }
+
+        /* Stop request */
+        if (priv->b_stop_rx_polling)
+        {
+            pr_info("xdma_napi_poll b_stop_rx_polling\n");
+            napi_complete_done(napi, work_done);
+            priv->b_stopped_rx_polling = true;
+
+            return work_done;
+        }
+
+        /* Normal completion */
+        if (work_done < budget)
+        {
+            // pr_info("xdma_napi_poll work_done: %d, budget: %d -> NAPI complete and IRQ re-enable\n", work_done, budget);
+
+            if (napi_complete_done(napi, work_done))
+            {
+                channel_interrupts_enable(xdev, irq_mask);
+            }
+        }
+
+        return work_done;
+}
+
+/* NAPI enable */
+void xdma_enable_napi(struct xdma_private* priv)
+{
+        if (!priv->napi_enabled)
+        {
+            napi_enable(&priv->napi);
+            priv->napi_enabled = true;
+            pr_info("NAPI enabled for xdma_netdev\n");
+        }
+}
+
+/* NAPI disable */
+void xdma_disable_napi(struct xdma_private* priv)
+{
+        if (priv->napi_enabled)
+        {
+            napi_disable(&priv->napi);
+            priv->napi_enabled = false;
+            pr_info("NAPI disabled for xdma_netdev\n");
+        }
+}
+
 int xdma_netdev_open(struct net_device *ndev)
 {
         struct xdma_private *priv = netdev_priv(ndev);
@@ -67,11 +362,42 @@ int xdma_netdev_open(struct net_device *ndev)
         unsigned long flag;
         int i;
 
-        netif_carrier_on(ndev);
-        netif_start_queue(ndev);
-        for (i = 0; i < TX_QUEUE_COUNT; i++) {
-                netif_start_subqueue(ndev, i);
+        if (!priv->ndev)
+        {
+            priv->ndev = ndev;
+            pr_info("xdma_netdev_open(): linked xdev->ndev to %s\n", ndev->name);
         }
+
+        /* Device ready + clear OFFLINE flag */
+        xdma_device_flag_clear(priv->xdev, XDEV_FLAG_OFFLINE);
+        netif_device_attach(ndev);
+
+        /* Enable IRQ (disabled in libxdma) */
+        enable_irq(priv->xdev->pdev->irq);
+        pr_info("xdma_netdev_open(): IRQ enabled\n");
+
+        /* Reset RX/TX software state */
+        priv->b_stop_rx_polling = false;
+        priv->b_stopped_rx_polling = false;
+        priv->last_tx_status = 0;
+
+        /* Enable NAPI */
+        xdma_enable_napi(priv);
+        pr_info("xdma_netdev_open(): NAPI initialized\n");
+
+        /* --------------------------------------------------------
+        * Initialize TX DMA Ring (NEW)
+        * --------------------------------------------------------
+        * All TX packets will be copied into these pre-allocated
+        * DMA-coherent buffers to eliminate dma_map_single() and
+        * prevent memory corruption.
+        */
+        if (xdma_tx_ring_init(&priv->tx_ring, &priv->pdev->dev))
+        {
+            pr_err("xdma_netdev_open(): TX ring init failed\n");
+            return -ENOMEM;
+        }
+        pr_info("xdma_netdev_open(): TX ring initialized\n");
 
         /* Set the RX descriptor */
         priv->rx_desc->src_addr_lo = cpu_to_le32(PCI_DMA_L(priv->res_dma_addr));
@@ -90,6 +416,15 @@ int xdma_netdev_open(struct net_device *ndev)
         iowrite32(DMA_ENGINE_START, &priv->rx_engine->regs->control);
         spin_unlock_irqrestore(&priv->rx_lock, flag);
 
+        netif_carrier_on(ndev);
+        netif_start_queue(ndev);
+        for (i = 0; i < TX_QUEUE_COUNT; i++)
+        {
+                netif_start_subqueue(ndev, i);
+        }
+
+        pr_info("xdma_netdev_open(): carrier ON + TX queues started\n");
+
         return 0;
 }
 
@@ -97,14 +432,44 @@ int xdma_netdev_close(struct net_device *ndev)
 {
         int i;
         struct xdma_private *priv = netdev_priv(ndev);
-        iowrite32(DMA_ENGINE_STOP, &priv->rx_engine->regs->control);
+        struct xdma_dev* xdev = priv->xdev;
+
+        /* 1. Stop flag set (prevent ISR from scheduling NAPI) */
+        WRITE_ONCE(priv->b_stop_rx_polling, true);
+
+        /* 2. Stop DMA engines */
+            iowrite32(DMA_ENGINE_STOP, &priv->rx_engine->regs->control);
+        iowrite32(DMA_ENGINE_STOP, &priv->tx_engine->regs->control);
+
+        /* 3. Mask all interrupts */
+        channel_interrupts_disable(xdev, 0xFFFFFFFF);
+        user_interrupts_disable(xdev, 0xFFFFFFFF);
+
+        /* 4. Synchronize pending IRQs */
+        if (priv->irq)
+            synchronize_irq(priv->irq);
+
+        /* 5. Disable NAPI */
+        if (priv->napi_enabled)
+        {
+            napi_disable(&priv->napi);
+            priv->napi_enabled = false;
+            pr_info("NAPI disabled for xdma_netdev\n");
+        }
+
+        /* 6. Stop TX/RX queues */
         netif_stop_queue(ndev);
-        for (i = 0; i < TX_QUEUE_COUNT; i++) {
+        for (i = 0; i < TX_QUEUE_COUNT; i++)
+        {
                 netif_stop_subqueue(ndev, i);
         }
-        pr_info("xdma_netdev_close\n");
+
         netif_carrier_off(ndev);
         pr_info("netif_carrier_off\n");
+
+        /* Free all DMA-coherent TX buffers allocated at open(). */
+        xdma_tx_ring_cleanup(&priv->tx_ring);
+        pr_info("xdma_netdev_close(): TX ring cleaned up\n");
         return 0;
 }
 
@@ -117,24 +482,48 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         sysclock_t sys_count, sys_count_upper, sys_count_lower;
         timestamp_t now;
         u16 frame_length;
-        dma_addr_t dma_addr;
         struct tx_buffer* tx_buffer;
         struct tx_metadata* tx_metadata;
         u32 to_value;
         u16 q;
-
+        u32 head, tail;
+        u32 next_head;
+        struct xdma_tx_ring* ring = &priv->tx_ring;
+        struct xdma_tx_slot* slot;
 
         /* Check desc count */
         q = skb_get_queue_mapping(skb);
         netif_stop_subqueue(ndev, q);
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
+
+        head = ring->head;
+        tail = ring->tail;
+        next_head = (head + 1) % XDMA_TX_RING_SIZE;
+
+        /* Ring full? Should not happen since we TX one packet at a time */
+        if (unlikely(next_head == tail))
+        {
+            pr_err("TX-XMIT: ring full (head=%u tail=%u)\n", head, tail);
+            return NETDEV_TX_BUSY;
+        }
+
+        /* Use head slot (producer slot) */
+        slot = &ring->slot[head];
+        if (unlikely(slot->skb != NULL))
+        {
+            pr_err("TX-ERROR: head slot[%u] is busy (skb=%p)\n", head, slot->skb);
+            return NETDEV_TX_BUSY;
+        }
+        // pr_info("TX-XMIT START: head=%u tail=%u skb_len=%u\n", head, tail, skb->len);
+
         skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
         /* Store packet length */
         frame_length = skb->len;
         skb->len = workaround_packet_size(skb->len);
 
-        if (skb_padto(skb, skb->len)) {
+        if (skb_padto(skb, skb->len))
+        {
                 pr_err("skb_padto failed\n");
                 netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
@@ -142,7 +531,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         }
 
         /* Jumbo frames not supported */
-        if (skb->len > XDMA_BUFFER_SIZE) {
+        if (skb->len > XDMA_BUFFER_SIZE)
+        {
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
 #endif
@@ -190,13 +580,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 tx_metadata->frame_length, tx_metadata->fail_policy);
         dump_buffer((unsigned char*)tx_metadata, (int)(sizeof(struct tx_metadata) + skb->len));
 
-        dma_addr = dma_map_single(&xdev->pdev->dev, skb->data, skb->len, DMA_TO_DEVICE);
-        if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
-                pr_err("dma_map_single failed\n");
-                netif_wake_subqueue(ndev, q);
-                return NETDEV_TX_BUSY;
-        }
-
         if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
                 if (priv->tstamp_config.tx_type == HWTSTAMP_TX_ON &&
                         !test_and_set_bit_lock(tx_metadata->timestamp_id, &priv->state)) {
@@ -229,10 +612,15 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 // TODO: track the number of skipped packets for ethtool stats
         }
 
+        /* Copy into DMA-coherent slot buffer */
+        memcpy(slot->vaddr, skb->data, skb->len);
+        slot->skb = skb;
+        slot->len = skb->len;
+
         /* netif_wake_queue() will be called in xdma_isr() */
-        priv->tx_dma_addr = dma_addr;
-        priv->tx_skb = skb;
-        tx_desc_set(priv->tx_desc, dma_addr, skb->len);
+
+        /* Set descriptor to this slot's dma buffer */
+        tx_desc_set(priv->tx_desc, slot->dma, slot->len);
 
         w = cpu_to_le32(PCI_DMA_L(priv->tx_bus_addr));
         iowrite32(w, xdev->bar[1] + DESC_REG_LO);
@@ -242,6 +630,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
 
         iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
+
+        /* Advance HEAD pointer (producer moves) */
+        ring->head = next_head;
         return NETDEV_TX_OK;
 }
 
@@ -321,7 +712,7 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 goto retry;
         }
         /*
-         * Read TX timestamp several times because 
+         * Read TX timestamp several times because
          * the work thread might try to read TX timestamp
          * before the register gets updated
          */
@@ -352,7 +743,8 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         priv->tx_work_skb[tstamp_id] = NULL;
         clear_bit_unlock(tstamp_id, &priv->state);
         skb_tstamp_tx(skb, &shhwtstamps);
-        dev_kfree_skb_any(skb);
+    /* dev_kfree_skb_any -> napi_consume_skb */
+    napi_consume_skb(skb, 0);
         return;
 
 return_error:

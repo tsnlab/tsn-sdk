@@ -116,9 +116,9 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 			}
 		} else {
 			// Best effort
-			if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
-				return false;
-			}
+			// if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
+			// 	return false;
+			// }
 			from = max(from, tsn_config->total_available_at);
 		}
 

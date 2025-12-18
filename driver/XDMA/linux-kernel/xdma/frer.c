@@ -5,6 +5,7 @@
  * - Talker: R-TAG insertion with sequence number generation
  * - Listener: Duplicate elimination using Vector Recovery Algorithm
  * - Stream Identification: SMAC + DMAC based
+ * - Multi-port support: Duplicate elimination across 2 ports
  */
 
 #include <linux/slab.h>
@@ -12,6 +13,144 @@
 #include <linux/etherdevice.h>
 
 #include "frer.h"
+
+/* Global FRER manager instance */
+struct frer_global g_frer;
+EXPORT_SYMBOL(g_frer);
+
+/**
+ * frer_global_init - Initialize global FRER manager
+ */
+void frer_global_init(void)
+{
+	if (g_frer.initialized)
+		return;
+
+	frer_init(&g_frer.config);
+	g_frer.config.num_ports = 0;
+	memset(g_frer.config.ports, 0, sizeof(g_frer.config.ports));
+	g_frer.initialized = true;
+	pr_info("FRER: Global manager initialized (max %d ports)\n", MAX_FRER_PORTS);
+}
+EXPORT_SYMBOL(frer_global_init);
+
+/**
+ * frer_global_cleanup - Cleanup global FRER manager
+ */
+void frer_global_cleanup(void)
+{
+	if (!g_frer.initialized)
+		return;
+
+	frer_cleanup(&g_frer.config);
+	g_frer.initialized = false;
+	pr_info("FRER: Global manager cleanup complete\n");
+}
+EXPORT_SYMBOL(frer_global_cleanup);
+
+/**
+ * frer_register_port - Register a network device as FRER port
+ * @ndev: Network device to register
+ *
+ * Returns port ID (0 or 1) on success, negative error code on failure.
+ */
+int frer_register_port(struct net_device *ndev)
+{
+	struct frer_config *frer = &g_frer.config;
+	unsigned long flags;
+	int port_id = -1;
+	int i;
+
+	if (!g_frer.initialized) {
+		frer_global_init();
+	}
+
+	spin_lock_irqsave(&frer->lock, flags);
+
+	/* Check if already registered */
+	for (i = 0; i < MAX_FRER_PORTS; i++) {
+		if (frer->ports[i] == ndev) {
+			port_id = i;
+			goto out;
+		}
+	}
+
+	/* Find empty slot */
+	for (i = 0; i < MAX_FRER_PORTS; i++) {
+		if (frer->ports[i] == NULL) {
+			frer->ports[i] = ndev;
+			frer->num_ports++;
+			port_id = i;
+			pr_info("FRER: Registered port %d: %s\n", port_id, ndev->name);
+			goto out;
+		}
+	}
+
+	pr_err("FRER: Cannot register port, max ports (%d) reached\n", MAX_FRER_PORTS);
+
+out:
+	spin_unlock_irqrestore(&frer->lock, flags);
+	return port_id;
+}
+EXPORT_SYMBOL(frer_register_port);
+
+/**
+ * frer_unregister_port - Unregister a network device from FRER
+ * @ndev: Network device to unregister
+ */
+void frer_unregister_port(struct net_device *ndev)
+{
+	struct frer_config *frer = &g_frer.config;
+	unsigned long flags;
+	int i;
+
+	if (!g_frer.initialized)
+		return;
+
+	spin_lock_irqsave(&frer->lock, flags);
+
+	for (i = 0; i < MAX_FRER_PORTS; i++) {
+		if (frer->ports[i] == ndev) {
+			frer->ports[i] = NULL;
+			frer->num_ports--;
+			pr_info("FRER: Unregistered port %d: %s\n", i, ndev->name);
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&frer->lock, flags);
+}
+EXPORT_SYMBOL(frer_unregister_port);
+
+/**
+ * frer_get_port_id - Get port ID for a network device
+ * @ndev: Network device
+ *
+ * Returns port ID (0 or 1) if registered, -1 if not found.
+ */
+int frer_get_port_id(struct net_device *ndev)
+{
+	struct frer_config *frer = &g_frer.config;
+	unsigned long flags;
+	int port_id = -1;
+	int i;
+
+	if (!g_frer.initialized)
+		return -1;
+
+	spin_lock_irqsave(&frer->lock, flags);
+
+	for (i = 0; i < MAX_FRER_PORTS; i++) {
+		if (frer->ports[i] == ndev) {
+			port_id = i;
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&frer->lock, flags);
+	return port_id;
+}
+EXPORT_SYMBOL(frer_get_port_id);
 
 /**
  * frer_init - Initialize FRER configuration
@@ -23,6 +162,8 @@ void frer_init(struct frer_config *frer)
 	spin_lock_init(&frer->lock);
 	frer->enabled = false;
 	frer->stream_count = 0;
+	frer->num_ports = 0;
+	memset(frer->ports, 0, sizeof(frer->ports));
 }
 
 /**
@@ -205,6 +346,7 @@ int frer_get_stream_stats(struct frer_config *frer, struct frer_stream_stats *st
 	stats->out_of_window_count = stream->seq_recv.out_of_window_count;
 	stats->recv_seq = stream->seq_recv.recv_seq;
 	stats->next_seq = stream->seq_gen.next_seq;
+	memcpy(stats->port_stats, stream->seq_recv.port_stats, sizeof(stats->port_stats));
 
 	spin_unlock_irqrestore(&frer->lock, flags);
 
@@ -309,6 +451,7 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  * frer_process_rtag - Process R-TAG and perform duplicate elimination (Listener side)
  * @skb: Socket buffer containing the frame
  * @frer: FRER configuration
+ * @port_id: ID of the receiving port (0 or 1), -1 if unknown
  *
  * Uses Vector Recovery Algorithm:
  * - Maintains recv_seq (highest sequence number accepted, recovery point)
@@ -323,6 +466,7 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  * - seq_num < recv_seq - HISTORY_LEN: Out of window, drop
  *
  * R-TAG is stripped from the frame on success.
+ * Per-port statistics are tracked if port_id is valid (0 or 1).
  *
  * Returns:
  *   FRER_PASS - Frame should be accepted (R-TAG stripped)
@@ -330,7 +474,7 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  *   FRER_DROP_OUT_OF_WINDOW - Frame is too old (outside history window)
  *   FRER_ERROR - Error processing frame
  */
-int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer)
+int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id)
 {
 	struct ethhdr *eth;
 	struct frer_rtag *rtag;
@@ -343,6 +487,7 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer)
 	int result = FRER_PASS;
 	int16_t delta;
 	int bit_pos;
+	bool valid_port = (port_id >= 0 && port_id < MAX_FRER_PORTS);
 
 	if (!frer->enabled) {
 		return FRER_PASS;
@@ -391,12 +536,18 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer)
 
 	/* Vector Recovery Algorithm */
 	stream->seq_recv.received_count++;
+	if (valid_port) {
+		stream->seq_recv.port_stats[port_id].received_count++;
+	}
 
 	if (!stream->seq_recv.initialized) {
 		/* First frame for this stream - initialize recovery point */
 		stream->seq_recv.recv_seq = seq_num;
 		stream->seq_recv.history = 0;
 		stream->seq_recv.initialized = true;
+		if (valid_port) {
+			stream->seq_recv.port_stats[port_id].passed_count++;
+		}
 		spin_unlock_irqrestore(&frer->lock, flags);
 		goto strip_rtag;
 	}
@@ -420,9 +571,15 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer)
 		}
 		stream->seq_recv.recv_seq = seq_num;
 		/* Accept: new frame */
+		if (valid_port) {
+			stream->seq_recv.port_stats[port_id].passed_count++;
+		}
 	} else if (delta == 0) {
 		/* seq_num == recv_seq: Duplicate of recovery point */
 		stream->seq_recv.eliminated_count++;
+		if (valid_port) {
+			stream->seq_recv.port_stats[port_id].eliminated_count++;
+		}
 		result = FRER_DROP_DUPLICATE;
 	} else {
 		/* delta < 0: seq_num is behind recv_seq */
@@ -435,11 +592,17 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer)
 		} else if (stream->seq_recv.history & (1ULL << bit_pos)) {
 			/* Bit already set - duplicate */
 			stream->seq_recv.eliminated_count++;
+			if (valid_port) {
+				stream->seq_recv.port_stats[port_id].eliminated_count++;
+			}
 			result = FRER_DROP_DUPLICATE;
 		} else {
 			/* Not seen before - out-of-order but valid */
 			stream->seq_recv.history |= (1ULL << bit_pos);
 			stream->seq_recv.out_of_order_count++;
+			if (valid_port) {
+				stream->seq_recv.port_stats[port_id].passed_count++;
+			}
 			/* Accept: out-of-order frame */
 		}
 	}

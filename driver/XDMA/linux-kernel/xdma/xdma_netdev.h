@@ -62,6 +62,8 @@ struct xdma_private {
         int irq;
         int rx_count;
 
+        int port_id;    /* Port ID for FRER (0 or 1) */
+
         struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
         struct sk_buff *tx_work_skb[TSN_TIMESTAMP_ID_MAX];
         sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];

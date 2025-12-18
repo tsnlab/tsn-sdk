@@ -1491,8 +1491,14 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
 		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
-			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer);
-			if (frer_result == FRER_DROP_DUPLICATE || 
+			/*
+			 * TODO: Read port_id from rx_metadata or HW register.
+			 * HW provides port ID via different read address.
+			 * Using -1 (unknown) until port detection is implemented.
+			 */
+			int rx_port_id = -1;
+			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
+			if (frer_result == FRER_DROP_DUPLICATE ||
 			    frer_result == FRER_DROP_OUT_OF_WINDOW) {
 				/* Duplicate or out-of-window frame detected, drop it */
 				dev_kfree_skb(skb);

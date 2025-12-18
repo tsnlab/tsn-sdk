@@ -23,6 +23,7 @@
 /* FRER configuration limits */
 #define MAX_FRER_STREAMS	64
 #define FRER_HASH_BITS		6
+#define MAX_FRER_PORTS		2
 
 /* Vector Recovery Algorithm history window size (in bits) */
 #define FRER_HISTORY_LEN	64
@@ -64,6 +65,13 @@ struct frer_seq_gen {
 	bool active;		/* Whether sequence generation is enabled */
 };
 
+/* Per-port statistics for sequence recovery */
+struct frer_port_stats {
+	uint64_t received_count;	/* Frames received on this port */
+	uint64_t passed_count;		/* Frames passed (first arrival) */
+	uint64_t eliminated_count;	/* Duplicates eliminated on this port */
+};
+
 /* Per-stream state for sequence recovery (Listener side)
  * Uses Vector Recovery Algorithm (supports reordering within history window)
  *
@@ -76,16 +84,22 @@ struct frer_seq_gen {
  * - seq_num == recv_seq: duplicate of recovery point, drop
  * - seq_num in history window: check/set bit in history bitmap
  * - seq_num < recv_seq - HISTORY_LEN: out of window (policy: drop)
+ *
+ * Multi-port support:
+ * - Same stream can receive from multiple ports
+ * - First frame with a sequence number passes, duplicates from other port dropped
+ * - Per-port statistics tracked separately
  */
 struct frer_seq_recv {
 	uint16_t recv_seq;		/* Recovery point (highest seq accepted) */
 	uint64_t history;		/* Bitmap: bit i = recv_seq - 1 - i received */
 	bool initialized;		/* Whether recv_seq is valid */
 	bool active;			/* Whether recovery is enabled */
-	uint64_t received_count;	/* Total frames received */
-	uint64_t eliminated_count;	/* Duplicate frames eliminated */
+	uint64_t received_count;	/* Total frames received (all ports) */
+	uint64_t eliminated_count;	/* Total duplicates eliminated */
 	uint64_t out_of_order_count;	/* Out-of-order frames accepted */
 	uint64_t out_of_window_count;	/* Frames dropped (too old) */
+	struct frer_port_stats port_stats[MAX_FRER_PORTS]; /* Per-port stats */
 };
 
 /* Stream entry in the hash table */
@@ -96,12 +110,20 @@ struct frer_stream {
 	struct hlist_node hash_node;	/* Hash table linkage */
 };
 
-/* FRER configuration (embedded in tsn_config) */
+/* FRER configuration (can be shared across multiple ports) */
 struct frer_config {
 	DECLARE_HASHTABLE(streams, FRER_HASH_BITS);
 	spinlock_t lock;
 	bool enabled;
 	uint32_t stream_count;
+	uint32_t num_ports;		/* Number of registered ports */
+	struct net_device *ports[MAX_FRER_PORTS]; /* Registered net devices */
+};
+
+/* Global FRER manager for multi-port support */
+struct frer_global {
+	struct frer_config config;
+	bool initialized;
 };
 
 /* IOCTL commands for FRER configuration */
@@ -125,13 +147,26 @@ struct frer_stream_stats {
 	uint64_t out_of_window_count;
 	uint16_t recv_seq;
 	uint16_t next_seq;
+	struct frer_port_stats port_stats[MAX_FRER_PORTS]; /* Per-port stats */
 };
 
 /* Forward declaration */
 struct xdma_dev;
 struct tsn_config;
 
-/* FRER initialization and cleanup */
+/* Global FRER manager */
+extern struct frer_global g_frer;
+
+/* Global FRER initialization and cleanup */
+void frer_global_init(void);
+void frer_global_cleanup(void);
+
+/* Port registration for multi-port support */
+int frer_register_port(struct net_device *ndev);
+void frer_unregister_port(struct net_device *ndev);
+int frer_get_port_id(struct net_device *ndev);
+
+/* FRER initialization and cleanup (per-config) */
 void frer_init(struct frer_config *frer);
 void frer_cleanup(struct frer_config *frer);
 
@@ -145,8 +180,10 @@ int frer_get_stream_stats(struct frer_config *frer, struct frer_stream_stats *st
 /* TX path: R-TAG insertion (Talker) */
 int frer_insert_rtag(struct sk_buff *skb, struct frer_stream *stream);
 
-/* RX path: R-TAG processing and duplicate elimination (Listener) */
-int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer);
+/* RX path: R-TAG processing and duplicate elimination (Listener)
+ * @port_id: ID of the receiving port (0 or 1), -1 if unknown
+ */
+int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id);
 
 /* Helper to compute hash for stream lookup */
 static inline u32 frer_stream_hash(const uint8_t *smac, const uint8_t *dmac)

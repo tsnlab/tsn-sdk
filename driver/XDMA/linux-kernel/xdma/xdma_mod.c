@@ -375,7 +375,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	xdev->ndev = ndev;
-	xpdev->ndev = ndev;
+	xpdev->ndev[0] = ndev;
 
 	/* Set up the network interface */
 	ndev->netdev_ops = &xdma_netdev_ops;
@@ -487,7 +487,7 @@ static void remove_one(struct pci_dev *pdev)
 	pr_info("pdev 0x%p, xdev 0x%p, 0x%p.\n",
 		pdev, xpdev, xpdev->xdev);
 
-	ndev = xpdev->ndev;
+	ndev = xpdev->ndev[0];
 	if (!ndev) {
 		pr_err("ndev is NULL\n");
 		return;

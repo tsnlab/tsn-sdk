@@ -455,10 +455,7 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 static void update_buffer(struct xdma_dev* xdev, uint32_t min_space) {
 	uint32_t threshold = min_space > HW_QUEUE_SIZE_PAD ? min_space : HW_QUEUE_SIZE_PAD;
 	if (xdev->tsn_config.buffer_space <= threshold) {
-		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
-		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
-		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
-		xdev->tsn_config.buffer_space = HW_QUEUE_SIZE - (u32)(total_pkts - sent_pkts - dropped_pkts);
+		xdev->tsn_config.buffer_space = (u32)alinx_get_fifo_cnt_by_xdev(xdev);
 	}
 }
 

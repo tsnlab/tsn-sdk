@@ -45,6 +45,9 @@ typedef uint32_t u32
 #define REG_TSN_SYSTEM_CONTROL_HIGH 0x0000
 #define REG_TSN_SYSTEM_CONTROL_LOW 0x0004
 
+#define REG_FBW_ADDR_FIFO_CNT_HIGH 0x0270
+#define REG_FBW_ADDR_FIFO_CNT_LOW 0x0274
+
 #define FIFO_DATA_CNT_MASK 0x00ff
 
 #define TSN_ENABLE 0x1
@@ -170,6 +173,7 @@ u64 alinx_get_buffer_write_status(struct pci_dev *pdev);
 u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev);
 
 void dump_buffer(unsigned char* buffer, int len);
 

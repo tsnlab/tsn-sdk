@@ -117,6 +117,10 @@ u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev) {
         return ((u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
 }
 
+u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev) {
+        return ((u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_LOW);
+}
+
 #ifdef __LIBXDMA_DEBUG__
 void dump_buffer(unsigned char* buffer, int len)
 {

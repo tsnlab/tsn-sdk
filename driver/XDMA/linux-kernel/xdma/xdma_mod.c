@@ -500,6 +500,7 @@ static void remove_one(struct pci_dev *pdev)
 	priv = netdev_priv(ndev);
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
+	cancel_delayed_work(&priv->rx_poll_work);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
 	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);

@@ -1400,8 +1400,8 @@ void xdma_rx_poll_work(struct work_struct *work) {
 	struct xdma_private* priv = container_of(delayed_work, struct xdma_private, rx_poll_work);
 	struct xdma_dev *xdev = priv->xdev;
 
-	if ((alinx_get_rx_fifo_status_by_xdev(xdev, 1 - priv->rx_port) & FIFO_DATA_CNT_MASK) > 0) {
-		write32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT(1 - priv->rx_port), xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	if ((alinx_get_rx_fifo_status_by_xdev(xdev, 1) & FIFO_DATA_CNT_MASK) > 0) {
+		/* Somehow read from the device directly - it seems file descriptors don't work in kernel space */
 	}
 
 	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));

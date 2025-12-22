@@ -48,9 +48,24 @@ typedef uint32_t u32
 #define REG_FBW_ADDR_FIFO_CNT_HIGH 0x0270
 #define REG_FBW_ADDR_FIFO_CNT_LOW 0x0274
 
+#define REG_ETH0_RX_FIFO_STATUS_HIGH 0x00f0
+#define REG_ETH0_RX_FIFO_STATUS_LOW 0x00f4
+
+#define REG_ETH1_RX_FIFO_STATUS_HIGH 0x0188
+#define REG_ETH1_RX_FIFO_STATUS_LOW 0x018c
+
 #define FIFO_DATA_CNT_MASK 0x00ff
 
 #define TSN_ENABLE 0x1
+#define TSN_TX_PORT0 0b00
+#define TSN_TX_PORT1 0b10
+#define TSN_RX_PORT0 0b000
+#define TSN_RX_PORT1 0b100
+
+#define TSN_TX_PORT(n) (TSN_TX_PORT##n)
+#define TSN_RX_PORT(n) (TSN_RX_PORT##n)
+
+#define RX_POLL_WORK_INTERVAL_US (100)
 
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
@@ -174,6 +189,7 @@ u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_rx_fifo_status_by_xdev(struct xdma_dev *xdev, int port_id);
 
 void dump_buffer(unsigned char* buffer, int len);
 

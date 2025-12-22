@@ -709,4 +709,5 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 
 void channel_interrupts_disable(struct xdma_dev *xdev, u32 mask);
 void channel_interrupts_enable(struct xdma_dev *xdev, u32 mask);
+void xdma_rx_poll_work(struct work_struct *work);
 #endif /* XDMA_LIB_H */

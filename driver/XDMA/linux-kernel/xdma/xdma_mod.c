@@ -352,8 +352,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	dev_set_drvdata(&pdev->dev, xpdev);
 
-	/* Set the TSN register to 0x1 */
-	iowrite32(TSN_ENABLE, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	/* Enable TSN and use Port 1 */
+	iowrite32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT0, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 
 	/* Allocate the network device */
 	/* TC command requires multiple TX queues */
@@ -441,6 +441,11 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
+	INIT_DELAYED_WORK(&priv->rx_poll_work, xdma_rx_poll_work);
+	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+
+	priv->tx_port = 0;
+	priv->rx_port = 0;
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);
 	if (!ptp_data) {

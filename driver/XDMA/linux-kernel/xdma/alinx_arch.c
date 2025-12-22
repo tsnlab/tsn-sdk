@@ -121,6 +121,18 @@ u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev) {
         return ((u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_LOW);
 }
 
+u64 alinx_get_rx_fifo_status_by_xdev(struct xdma_dev *xdev, int port) {
+        switch (port) {
+        case 0:
+                return ((u64)read32(xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_LOW);
+        case 1:
+                return ((u64)read32(xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_LOW);
+        default:
+                pr_err("Invalid port id: %d\n", port);
+                return 0;
+        }
+}
+
 #ifdef __LIBXDMA_DEBUG__
 void dump_buffer(unsigned char* buffer, int len)
 {

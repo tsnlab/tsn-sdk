@@ -27,7 +27,9 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 #include <linux/ptp_classify.h>
+#include <linux/jiffies.h>
 
+#include "alinx_arch.h"
 #include "libxdma.h"
 #include "libxdma_api.h"
 #include "cdev_sgdma.h"
@@ -1393,6 +1395,18 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 	}
 }
 
+void xdma_rx_poll_work(struct work_struct *work) {
+	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
+	struct xdma_private* priv = container_of(delayed_work, struct xdma_private, rx_poll_work);
+	struct xdma_dev *xdev = priv->xdev;
+
+	if ((alinx_get_rx_fifo_status_by_xdev(xdev, 1 - priv->rx_port) & FIFO_DATA_CNT_MASK) > 0) {
+		write32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT(1 - priv->rx_port), xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	}
+
+	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+}
+
 /*
  * xdma_isr() - Interrupt handler
  *
@@ -1496,7 +1510,8 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			 * HW provides port ID via different read address.
 			 * Using -1 (unknown) until port detection is implemented.
 			 */
-			int rx_port_id = -1;
+			/* FIXME: Port id switches from time to time for now */
+			int rx_port_id = priv->rx_port;
 			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
 			if (frer_result == FRER_DROP_DUPLICATE ||
 			    frer_result == FRER_DROP_OUT_OF_WINDOW) {

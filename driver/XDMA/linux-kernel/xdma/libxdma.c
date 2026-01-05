@@ -67,6 +67,11 @@ module_param(desc_blen_max, uint, 0644);
 MODULE_PARM_DESC(desc_blen_max,
 		 "per descriptor max. buffer length, default is (1 << 28) - 1");
 
+unsigned int rx_poll_mode = 1;
+module_param(rx_poll_mode, uint, 0644);
+MODULE_PARM_DESC(rx_poll_mode,
+		 "Use polling for RX (both ports), default is 1 (enabled)");
+
 #define XDMA_PERF_NUM_DESC 128
 
 /* Kernel version adaptative code */
@@ -1399,9 +1404,25 @@ void xdma_rx_poll_work(struct work_struct *work) {
 	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
 	struct xdma_private* priv = container_of(delayed_work, struct xdma_private, rx_poll_work);
 	struct xdma_dev *xdev = priv->xdev;
+	u32 cnt_a, cnt_b;
 
-	if ((alinx_get_rx_fifo_status_by_xdev(xdev, 1) & FIFO_DATA_CNT_MASK) > 0) {
-		/* Somehow read from the device directly - it seems file descriptors don't work in kernel space */
+	if (!rx_poll_mode) {
+		schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
+		return;
+	}
+
+	cnt_a = alinx_get_rx_fifo_status_by_xdev(xdev, 0) & FIFO_DATA_CNT_MASK;
+	cnt_b = alinx_get_rx_fifo_status_by_xdev(xdev, 1) & FIFO_DATA_CNT_MASK;
+
+	/* Switch port if current is empty but other has data */
+	if (cnt_a > 0 && priv->rx_port != 0) {
+		iowrite32(TSN_ENABLE | TSN_TX_PORT(priv->tx_port) | TSN_RX_PORT0,
+			  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+		priv->rx_port = 0;
+	} else if (cnt_b > 0 && cnt_a == 0 && priv->rx_port != 1) {
+		iowrite32(TSN_ENABLE | TSN_TX_PORT(priv->tx_port) | TSN_RX_PORT1,
+			  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+		priv->rx_port = 1;
 	}
 
 	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
@@ -1465,78 +1486,73 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	priv = netdev_priv(ndev);
 	mask = ch_irq & xdev->mask_irq_c2h;
 	if (mask) {
-		dbg_info("xdma_isr c2h");
 		engine = &xdev->engine_c2h[0];
-		result = priv->res;
-		rx_buffer = (struct rx_buffer*)priv->rx_buffer;
+
+		if (rx_poll_mode) {
+			/* Poll mode: just acknowledge interrupt, polling work handles RX */
+			engine_status_read(engine, 1, 0);
+			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+		} else {
+			/* ISR mode: handle RX in interrupt context */
+			dbg_info("xdma_isr c2h");
+			result = priv->res;
+			rx_buffer = (struct rx_buffer*)priv->rx_buffer;
 
 #ifdef __LIBXDMA_DEBUG__
-		assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
+			assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
 #endif
-		spin_lock_irqsave(&priv->rx_lock, flag);
-		engine_status_read(engine, 1, 0);
-		// skb_len = rx_buffer->metadata.frame_length - CRC_LEN;
-		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
-		if (skb_len < 0) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Invalid skb_len\n");
-			return IRQ_NONE;
-		}
-		skb = dev_alloc_skb(skb_len);
-		if (!skb) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Failed to allocate skb\n");
-			return IRQ_NONE;
-		}
-		memcpy(
-			skb_put(skb, skb_len),
-			priv->rx_buffer + RX_METADATA_SIZE,
-			skb_len);
-		if (filter_rx_timestamp(priv, skb)) {
-			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
-		}
-		skb->dev = ndev;
-
-		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
-		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
-			/*
-			 * TODO: Read port_id from rx_metadata or HW register.
-			 * HW provides port ID via different read address.
-			 * Using -1 (unknown) until port detection is implemented.
-			 */
-			/* FIXME: Port id switches from time to time for now */
-			int rx_port_id = priv->rx_port;
-			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
-			if (frer_result == FRER_DROP_DUPLICATE ||
-			    frer_result == FRER_DROP_OUT_OF_WINDOW) {
-				/* Duplicate or out-of-window frame detected, drop it */
-				dev_kfree_skb(skb);
+			spin_lock_irqsave(&priv->rx_lock, flag);
+			engine_status_read(engine, 1, 0);
+			skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
+			if (skb_len < 0) {
 				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 				iowrite32(DMA_ENGINE_START, &engine->regs->control);
 				spin_unlock_irqrestore(&priv->rx_lock, flag);
-				return IRQ_HANDLED;
+				pr_err("Invalid skb_len\n");
+				return IRQ_NONE;
 			}
+			skb = dev_alloc_skb(skb_len);
+			if (!skb) {
+				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+				iowrite32(DMA_ENGINE_START, &engine->regs->control);
+				spin_unlock_irqrestore(&priv->rx_lock, flag);
+				pr_err("Failed to allocate skb\n");
+				return IRQ_NONE;
+			}
+			memcpy(
+				skb_put(skb, skb_len),
+				priv->rx_buffer + RX_METADATA_SIZE,
+				skb_len);
+			if (filter_rx_timestamp(priv, skb)) {
+				skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
+			}
+			skb->dev = ndev;
+
+			/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
+			if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
+				int rx_port_id = priv->rx_port;
+				int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
+				if (frer_result == FRER_DROP_DUPLICATE ||
+				    frer_result == FRER_DROP_OUT_OF_WINDOW) {
+					dev_kfree_skb(skb);
+					iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+					channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+					iowrite32(DMA_ENGINE_START, &engine->regs->control);
+					spin_unlock_irqrestore(&priv->rx_lock, flag);
+					return IRQ_HANDLED;
+				}
+			}
+
+			skb->protocol = eth_type_trans(skb, ndev);
+			netif_rx(skb);
+
+			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+			iowrite32(DMA_ENGINE_START, &engine->regs->control);
+			spin_unlock_irqrestore(&priv->rx_lock, flag);
 		}
-
-		skb->protocol = eth_type_trans(skb, ndev);
-
-		/* Transfer the skb to the Linux network stack */
-		netif_rx(skb);
-
-		/* Stop the engine */
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-
-		/* Start the engine */
-		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-		iowrite32(DMA_ENGINE_START, &engine->regs->control);
-		spin_unlock_irqrestore(&priv->rx_lock, flag);
 	}
 
 	mask = ch_irq & xdev->mask_irq_h2c;

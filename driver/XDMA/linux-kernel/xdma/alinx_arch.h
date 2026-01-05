@@ -167,7 +167,7 @@ struct tsn_config {
 	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
-	
+
 	/* FRER (802.1CB) configuration */
 	struct frer_config *frer;
 };

@@ -57,10 +57,12 @@ typedef uint32_t u32
 #define FIFO_DATA_CNT_MASK 0x00ff
 
 #define TSN_ENABLE 0x1
-#define TSN_TX_PORT0 0b00
-#define TSN_TX_PORT1 0b10
-#define TSN_RX_PORT0 0b000
-#define TSN_RX_PORT1 0b100
+/* Bit 1: RX port select (0=port A, 1=port B) */
+/* Bit 2: TX port select (0=port A, 1=port B) */
+#define TSN_TX_PORT0 0b000
+#define TSN_TX_PORT1 0b100
+#define TSN_RX_PORT0 0b00
+#define TSN_RX_PORT1 0b10
 
 #define TSN_TX_PORT(n) (TSN_TX_PORT##n)
 #define TSN_RX_PORT(n) (TSN_RX_PORT##n)

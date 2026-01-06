@@ -637,6 +637,9 @@ struct xdma_dev {
 	/* SD_Accel specific */
 	enum dev_capabilities capabilities;
 	u64 feature_id;
+
+    /* struct xdma_dev */
+    atomic_t isr_ready; // or bool with READ/WRITE_ONCE
 };
 
 static inline int xdma_device_flag_check(struct xdma_dev *xdev, unsigned int f)

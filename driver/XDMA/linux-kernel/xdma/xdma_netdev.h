@@ -10,6 +10,7 @@
 #include <linux/net_tstamp.h>
 
 #include "xdma_mod.h"
+#include "xdma_rx_ring.h"
 #include "xdma_tx_ring.h"
 
 #define DESC_REG_LO (SGDMA_OFFSET_FROM_CHANNEL + 0x80)
@@ -36,52 +37,85 @@ enum xdma_state_t {
         XDMA_TX4_IN_PROGRESS = 4,
 };
 
+/* Multi-descriptor support
+ * - TX and RX counts may diverge later, so keep them separate.
+ */
+#ifndef XDMA_TX_DESC_RING_SIZE
+#define XDMA_TX_DESC_RING_SIZE 2
+#endif
+
+#ifndef XDMA_RX_DESC_RING_SIZE
+#define XDMA_RX_DESC_RING_SIZE 2
+#endif
+
 struct xdma_private {
-        struct pci_dev *pdev;
-        struct net_device *ndev;
-        struct xdma_dev *xdev;
+    struct pci_dev* pdev;
+    struct net_device* ndev;
+    struct xdma_dev* xdev;
 
-        struct xdma_engine *tx_engine;
-        struct xdma_engine *rx_engine;
-        struct xdma_desc *rx_desc;
-        struct xdma_desc *tx_desc;
+    /* Optional cached engine pointers (recommend: keep consistent usage) */
+    struct xdma_engine* tx_engine;
+    struct xdma_engine* rx_engine;
 
-        struct xdma_result *res;
+    /* -----------------------------
+     * TX descriptor ring (ping-pong now, scalable to N)
+     * ----------------------------- */
+    struct xdma_desc* tx_desc_ring[XDMA_TX_DESC_RING_SIZE];
+    dma_addr_t tx_desc_bus[XDMA_TX_DESC_RING_SIZE];
 
-        dma_addr_t tx_bus_addr;
-        dma_addr_t tx_dma_addr;
-        dma_addr_t rx_bus_addr;
-        dma_addr_t rx_dma_addr;
-        dma_addr_t res_bus_addr;
-        dma_addr_t res_dma_addr;
+    /* Ownership / indices (outstanding=1 model) */
+    u32 tx_desc_prep;         /* SW prepares this next */
+    u32 tx_desc_pending;      /* last STARTed descriptor index */
+    bool tx_desc_has_pending; /* true after START until completion */
 
-        struct sk_buff *rx_skb;
-        struct sk_buff *tx_skb;
-        u8 *rx_buffer;
-        spinlock_t tx_lock;
-        spinlock_t rx_lock;
-        int irq;
-        int rx_count;
+    /* Optional state tracking */
+    u8 tx_desc_state[XDMA_TX_DESC_RING_SIZE]; /* DESC_EMPTY/READY/BUSY */
+
+    /* -----------------------------
+     * RX descriptor ring (ping-pong now, scalable to N)
+     * - Each RX descriptor uses:
+     *   src_addr = result(writeback) buffer (length/metadata)
+     *   dst_addr = RX payload buffer
+     * ----------------------------- */
+    struct xdma_rx_ring rx_ring;
+
+    /* Completed slot index (set by ISR, consumed by NAPI poll) */
+    u32 rx_done_idx;
+
+    /* Optional state tracking */
+    u8 rx_desc_state[XDMA_RX_DESC_RING_SIZE]; /* DESC_EMPTY/READY/BUSY */
+
+    // dma_addr_t tx_bus_addr;
+    // dma_addr_t tx_dma_addr;
+
+    // struct sk_buff* rx_skb;
+    // struct sk_buff* tx_skb;
+
+    spinlock_t tx_lock;
+    spinlock_t rx_lock;
+
+    int irq;
+    int rx_count;
 
     /* NAPI */
     struct napi_struct napi;
     bool napi_enabled;
 
-        struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
-        struct sk_buff *tx_work_skb[TSN_TIMESTAMP_ID_MAX];
-        sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];
-        sysclock_t tx_work_wait_until[TSN_TIMESTAMP_ID_MAX];
-        struct hwtstamp_config tstamp_config;
-        sysclock_t last_tx_tstamp[TSN_TIMESTAMP_ID_MAX];
-        int tstamp_retry[TSN_TIMESTAMP_ID_MAX];
+    struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
+    struct sk_buff* tx_work_skb[TSN_TIMESTAMP_ID_MAX];
+    sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];
+    sysclock_t tx_work_wait_until[TSN_TIMESTAMP_ID_MAX];
+    struct hwtstamp_config tstamp_config;
+    sysclock_t last_tx_tstamp[TSN_TIMESTAMP_ID_MAX];
+    int tstamp_retry[TSN_TIMESTAMP_ID_MAX];
 
-        uint64_t total_tx_count;
-        uint64_t total_tx_drop_count;
-        uint64_t last_normal_timeout;
-        uint64_t last_to_overflow_popped;
-        uint64_t last_to_overflow_timeout;
+    uint64_t total_tx_count;
+    uint64_t total_tx_drop_count;
+    uint64_t last_normal_timeout;
+    uint64_t last_to_overflow_popped;
+    uint64_t last_to_overflow_timeout;
 
-        unsigned long state;
+    unsigned long state;
 
     bool b_stop_rx_polling;
     bool b_stopped_rx_polling;
@@ -91,13 +125,10 @@ struct xdma_private {
     u32 last_tx_status; /* set when TX DMA interrupt triggers */
     u32 last_rx_status; /* set when RX DMA interrupt triggers */
 
-    /* XDMA TX Ring
-     * A fixed DMA-coherent buffer ring used to eliminate
-     * dma_map_single()/dma_unmap_single() race conditions and
-     * prevent memory corruption.
-     * All TX data is memcpy'ed into ring slots before DMA submission.
-     */
+    /* TX data ring (your existing coherent ring) */
     struct xdma_tx_ring tx_ring;
+
+    atomic_t tx_done_cnt; /* ISR increments, NAPI poll consumes */
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)

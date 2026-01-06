@@ -293,6 +293,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_out;
 	}
 
+    disable_irq_nosync(pdev->irq);
+
 	if (xpdev->user_max > MAX_USER_IRQ) {
 		pr_err("Maximum users limit reached\n");
 		rv = -EINVAL;
@@ -338,10 +340,10 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_out;
 	}
 
-	pr_info("%s xdma%d, pdev 0x%p, xdev 0x%p, 0x%p, usr %d, ch %d,%d.\n",
-		dev_name(&pdev->dev), xdev->idx, pdev, xpdev, xdev,
-		xpdev->user_max, xpdev->h2c_channel_max,
-		xpdev->c2h_channel_max);
+    atomic_set(&xdev->isr_ready, 0);
+
+    pr_info("%s xdma%d, pdev 0x%p, xdev 0x%p, 0x%p, usr %d, ch %d,%d.\n", dev_name(&pdev->dev), xdev->idx, pdev, xpdev,
+            xdev, xpdev->user_max, xpdev->h2c_channel_max, xpdev->c2h_channel_max);
 
 	xpdev->xdev = hndl;
 
@@ -392,40 +394,12 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* initialize NAPI structure */
 /* Maximum number of packets (work units) the NAPI poll may process	*/
 #define DEFAULT_BUDGET 64
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	netif_napi_add_weight(ndev, &priv->napi, xdma_napi_poll, DEFAULT_BUDGET);
+#else
+    netif_napi_add(ndev, &priv->napi, xdma_napi_poll, DEFAULT_BUDGET);
+#endif
     priv->napi_enabled = false;
-
-	priv->tx_desc = dma_alloc_coherent(
-				&pdev->dev,
-				sizeof(struct xdma_desc),
-				&priv->tx_bus_addr,
-				GFP_KERNEL);
-	if (!priv->tx_desc) {
-		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
-	}
-
-	priv->rx_desc = dma_alloc_coherent(
-				&pdev->dev,
-				sizeof(struct xdma_desc),
-				&priv->rx_bus_addr,
-				GFP_KERNEL);
-	if (!priv->rx_desc) {
-		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
-	}
-
-	priv->res = dma_alloc_coherent(&pdev->dev, sizeof(struct xdma_result), &priv->res_dma_addr, GFP_KERNEL);
-	if (!priv->res) {
-		pr_err("res dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
-	}
 
 	spin_lock_init(&priv->tx_lock);
 	spin_lock_init(&priv->rx_lock);
@@ -433,14 +407,6 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* Set the MAC address */
 	get_mac_address(mac_addr, xdev);
 	dev_addr_set(ndev, mac_addr);
-
-	priv->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &priv->rx_dma_addr, GFP_KERNEL);
-	if (!priv->rx_buffer) {
-		pr_err("buffer dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
-	}
 
 	/* Tx works for each timestamp id */
 	INIT_WORK(&priv->tx_work[1], xdma_tx_work1);
@@ -466,12 +432,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_out;
 	}
 
-	/* disable irq to prevent crash with null of netdev */
-    disable_irq(pdev->irq);
-    pr_info("xdma: IRQ registered but temporarily disabled until netdev open()\n");
-
 	channel_interrupts_enable(xdev, ~0);
-	//netif_stop_queue(ndev);
+    netif_stop_queue(ndev);
 	return 0;
 
 err_out:
@@ -514,10 +476,6 @@ static void remove_one(struct pci_dev *pdev)
     }
     netif_napi_del(&priv->napi);
 
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
-	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_result), priv->res, priv->res_dma_addr);
 	unregister_netdev(ndev);
 	ptp_device_destroy(ptp_data);
 	free_netdev(ndev);

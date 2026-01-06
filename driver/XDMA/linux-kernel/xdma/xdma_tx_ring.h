@@ -30,6 +30,9 @@
  * len   : actual transmitted length copied into vaddr
  */
 struct xdma_tx_slot {
+    void* raw_vaddr; /* dma_alloc_coherent 시작 주소 */
+    dma_addr_t raw_dma;
+
     void* vaddr;
     dma_addr_t dma;
     struct sk_buff* skb;
@@ -58,6 +61,9 @@ struct xdma_tx_ring {
 
     spinlock_t lock; /* Protects head/tail updates */
 };
+
+inline void xdma_tx_guard_fill(void* raw, size_t payload_sz);
+inline int xdma_tx_guard_check(void* raw, size_t payload_sz);
 
 /* Allocate all TX slots and DMA-coherent buffers */
 int xdma_tx_ring_init(struct xdma_tx_ring* ring, struct device* dev);

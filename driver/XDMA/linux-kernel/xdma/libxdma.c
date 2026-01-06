@@ -1394,15 +1394,22 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 
 /* ============================================================
  * RX ISR handles only C2H (device -> host) engine interrupt
+ *  - Per-slot writeback (priv->rx_res_ring[idx]) holds length
+ *  - Outstanding=1 model: completion corresponds to rx_desc_pending
+ *  - HW requires STOP->START between packets
+ *  - If length is invalid (e.g. 0), keep the same descriptor and restart
  * ============================================================ */
 static void xdma_isr_rx(struct xdma_dev* xdev, struct xdma_private* priv, u32 ch_irq)
 {
     struct xdma_engine* engine;
-    struct xdma_result* result;
-    struct rx_buffer* rx_buffer;
-    unsigned long flag;
+    struct xdma_rx_ring* rxr;
+    unsigned long flags;
     u32 mask;
+    u32 status_rx;
+    u32 done_idx;
+    struct xdma_result* res;
     int skb_len;
+    u32 raw_len;
 
     /* Check C2H mask */
     mask = ch_irq & xdev->mask_irq_c2h;
@@ -1410,48 +1417,107 @@ static void xdma_isr_rx(struct xdma_dev* xdev, struct xdma_private* priv, u32 ch
         return;
 
     engine = &xdev->engine_c2h[0];
-    result = priv->res;
-    rx_buffer = (struct rx_buffer*)priv->rx_buffer;
+    rxr = &priv->rx_ring;
 
-    spin_lock_irqsave(&priv->rx_lock, flag);
+    spin_lock_irqsave(&priv->rx_lock, flags);
 
-    /* Read DMA status (debug only) */
-    u32 status_rx = ioread32(&engine->regs->status);
+    /* Read DMA status */
+    status_rx = ioread32(&engine->regs->status);
     WRITE_ONCE(priv->last_rx_status, status_rx);
-    // pr_info("[ISR][RX] DMA status=0x%x\n", status);
 
-    /* Extract packet length excluding metadata and CRC */
-    skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
-    if (skb_len <= 0 || skb_len > ETH_FRAME_LEN)
+    /* If not a descriptor completion, nothing to do */
+    if (!(status_rx & XDMA_STAT_DESC_COMPLETED))
 	{
-        pr_warn("[ISR][RX] Invalid skb_len=%d (result->length=%d)\n", skb_len, result->length);
-        priv->rx_pending = false;
-        spin_unlock_irqrestore(&priv->rx_lock, flag);
-        goto rx_restart;
+        spin_unlock_irqrestore(&priv->rx_lock, flags);
+        return;
     }
 
-    /* Stop RX DMA temporarily before handing data to NAPI */
+    // pr_info("[ISR][RX] interrupt detected (status=0x%x)\n", status_rx);
+
+    /*
+     * ACK/CLEAR completion + busy bits in ISR.
+     * HW may latch completion until cleared.
+     */
+    iowrite32(XDMA_STAT_DESC_COMPLETED | XDMA_STAT_BUSY, &engine->regs->status_rc);
+
+    /*
+     * Outstanding=1 model:
+     * The completed descriptor is the one we last STARTed.
+     */
+    if (unlikely(!READ_ONCE(rxr->has_pending)))
+	{
+        /* Should not happen; recover safely */
+        done_idx = 0;
+    }
+	else
+	{
+        done_idx = READ_ONCE(rxr->pending);
+        if (unlikely(done_idx >= XDMA_RX_DESC_RING_SIZE))
+            done_idx = 0;
+    }
+
+    /* Fetch per-slot writeback/result buffer from rx_ring */
+    res = rxr->res[done_idx];
+    if (unlikely(!res))
+	{
+        pr_err("[ISR][RX] res is NULL (slot=%u)\n", done_idx);
+
+        /* Recover: keep same desc, STOP->START */
+        WRITE_ONCE(priv->rx_pending, false);
+        iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+        iowrite32(DMA_ENGINE_START, &engine->regs->control);
+
+        spin_unlock_irqrestore(&priv->rx_lock, flags);
+        return;
+    }
+
+    /*
+     * Ensure DMA writes to coherent memory are observed before CPU reads length.
+     * (Coherent memory usually makes this unnecessary, but it is a safe diagnostic barrier.)
+     */
+    dma_rmb();
+
+    raw_len = le32_to_cpu(res->length);
+    skb_len = (int)raw_len - RX_METADATA_SIZE - CRC_LEN;
+
+    /* Handle invalid/spurious completion (e.g. length=0) */
+    if (skb_len <= 0 || skb_len > ETH_FRAME_LEN || raw_len > XDMA_BUFFER_SIZE)
+	{
+        pr_warn("[ISR][RX] Invalid len (skb_len=%d, raw_len=%u, slot=%u)\n", skb_len, raw_len, done_idx);
+
+        WRITE_ONCE(priv->rx_pending, false);
+
+        /*
+         * IMPORTANT:
+         * Clear the per-slot writeback area to avoid re-processing stale length.
+         */
+        memset(rxr->res[done_idx], 0, sizeof(struct xdma_result));
+
+        /*
+         * Keep the SAME descriptor armed.
+         * If HW needs STOP->START to accept next packet, do it here.
+         */
+        iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+        iowrite32(DMA_ENGINE_START, &engine->regs->control);
+
+        spin_unlock_irqrestore(&priv->rx_lock, flags);
+        return;
+    }
+
+    /*
+     * Valid packet:
+     * stop RX engine temporarily (current design),
+     * set rx_pending, schedule NAPI to process and rotate desc in poll.
+     */
     iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 
-    /* Valid packet ? schedule NAPI for RX handling */
-    priv->rx_pending = true;
-    if (!test_bit(NAPI_STATE_SCHED, &priv->napi.state) && likely(napi_schedule_prep(&priv->napi)))
-	{
+    WRITE_ONCE(priv->rx_pending, true);
+
+    /* Schedule NAPI */
+    if (likely(napi_schedule_prep(&priv->napi)))
         __napi_schedule(&priv->napi);
-        // pr_info("[ISR][RX] NAPI scheduled (len=%d)\n", skb_len);
-    } else {
-        // pr_info("[ISR][RX] NAPI already running\n");
-    }
 
-    spin_unlock_irqrestore(&priv->rx_lock, flag);
-    return;
-
-rx_restart:
-    /* Restart RX DMA engine after invalid packet or error */
-    iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-    channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-    iowrite32(DMA_ENGINE_START, &engine->regs->control);
-    pr_info("[ISR][RX] RX DMA restarted\n");
+    spin_unlock_irqrestore(&priv->rx_lock, flags);
 }
 
 /* ============================================================
@@ -1482,13 +1548,15 @@ static void xdma_isr_tx(struct xdma_dev* xdev, struct xdma_private* priv, u32 ch
 	{
         /* Clear completion + busy bits */
         iowrite32(XDMA_STAT_DESC_COMPLETED | XDMA_STAT_BUSY, &engine->regs->status_rc);
+        (void)ioread32(&engine->regs->status_rc); /* flush ACK */
+
+        atomic_inc(&priv->tx_done_cnt);
 
         /* Schedule NAPI for TX cleanup */
-        if (!test_bit(NAPI_STATE_SCHED, &priv->napi.state) && likely(napi_schedule_prep(&priv->napi))) {
+        if (likely(napi_schedule_prep(&priv->napi)))
+		{
             __napi_schedule(&priv->napi);
             // pr_info("[ISR][TX] NAPI scheduled for TX cleanup\n");
-        } else {
-            // pr_info("[ISR][TX] NAPI already scheduled\n");
         }
     }
 }
@@ -1503,21 +1571,43 @@ static irqreturn_t xdma_isr(int irq, void* dev_id)
     struct xdma_private* priv;
     struct net_device* ndev;
     u32 ch_irq;
+    bool napi_scheduled = false;
 
-    /* ========================= BASIC CHECK ========================= */
-    if (unlikely(!xdev)) {
+    if (unlikely(!xdev))
+	{
         pr_err("[ISR] Invalid xdev pointer\n");
         return IRQ_NONE;
     }
 
-    // pr_info("xdma_isr\n");
-
     irq_regs = (struct interrupt_regs*)(xdev->bar[xdev->config_bar_idx] + XDMA_OFS_INT_CTRL);
 
-    /* ========================= READ IRQ REQUEST ========================= */
+    /* Read request first (even if not ready) */
     ch_irq = read_register(&irq_regs->channel_int_request);
     if (!ch_irq)
         return IRQ_NONE;
+
+    /*
+     * If driver is not ready, do NOT touch netdev/priv.
+     * But DO clear/ack to avoid latched IRQ blocking future interrupts.
+     */
+    if (unlikely(atomic_read(&xdev->isr_ready) == 0))
+	{
+        /* Disable interrupt sources we saw */
+        channel_interrupts_disable(xdev, ch_irq);
+
+        /* Best-effort: clear engine status (W1C) to drop latched completion */
+        if (xdev->h2c_channel_max > 0)
+            iowrite32(0xFFFFFFFF, &xdev->engine_h2c[0].regs->status_rc);
+        if (xdev->c2h_channel_max > 0)
+            iowrite32(0xFFFFFFFF, &xdev->engine_c2h[0].regs->status_rc);
+
+        /* Re-enable so device can continue after init */
+        channel_interrupts_enable(xdev, ch_irq);
+
+        return IRQ_HANDLED;
+    }
+
+    // pr_info("xdma_isr\n");
 
     /* Disable interrupt sources until ISR completes */
     channel_interrupts_disable(xdev, ch_irq);
@@ -1538,18 +1628,20 @@ static irqreturn_t xdma_isr(int irq, void* dev_id)
 
     // pr_info("[ISR] ch_irq=0x%x (mask_c2h=0x%x, mask_h2c=0x%x)\n", ch_irq, xdev->mask_irq_c2h, xdev->mask_irq_h2c);
 
-    /* ========================= RX PATH ========================= */
+    /* RX/TX handlers */
     xdma_isr_rx(xdev, priv, ch_irq);
-
-    /* ========================= TX PATH ========================= */
     xdma_isr_tx(xdev, priv, ch_irq);
 
-irq_enable_exit:
-    /* Re-enable interrupts for the serviced channels */
-    channel_interrupts_enable(xdev, ch_irq);
-    xdev->irq_count++;
-    // pr_info("[ISR] exit (irq_count=%u)\n", xdev->irq_count);
+    /* If NAPI scheduled, poll will re-enable */
+    napi_scheduled = test_bit(NAPI_STATE_SCHED, &priv->napi.state);
 
+irq_enable_exit:
+    if (!napi_scheduled)
+	{
+        channel_interrupts_enable(xdev, ch_irq);
+    }
+
+    xdev->irq_count++;
     return IRQ_HANDLED;
 }
 

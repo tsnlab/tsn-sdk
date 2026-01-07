@@ -424,12 +424,11 @@ int frer_insert_rtag_tx(struct sk_buff *skb, struct frer_stream *stream,
 	rtag.reserved = 0;
 	rtag.seq_num = htons(stream->seq_gen.next_seq++);
 
-	/* Insert R-TAG after ETH header */
-	memcpy(frame + ETH_HLEN, &rtag, FRER_RTAG_SIZE);
+	/* Insert R-TAG after ETH header, but the ethertype overlaps with R-TAG */
+	memcpy(frame + offsetof(struct ethhdr, h_proto), &rtag, FRER_RTAG_SIZE);
 
 	/* Update EtherType to R-TAG, put original after R-TAG */
-	eth->h_proto = htons(ETH_P_RTAG);
-	*(__be16 *)(frame + ETH_HLEN + FRER_RTAG_SIZE) = orig_proto;
+	*(__be16 *)(frame + offsetof(struct ethhdr, h_proto) + FRER_RTAG_SIZE) = orig_proto;
 
 	/* Extend skb length */
 	skb_put(skb, FRER_RTAG_SIZE);

@@ -14,6 +14,12 @@ void write32(u32 val, void * addr) {
         iowrite32(val, addr);
 }
 
+u64 read64(void *addr_high, void *addr_low) {
+        u32 high = ioread32(addr_high);
+        u32 low = ioread32(addr_low);
+        return ((u64)high << 32) | (u64)low;
+}
+
 #elif defined __ZEPHYR__
 
 #include <zephyr/sys/sys_io.h>
@@ -24,6 +30,12 @@ u32 read32(void * addr) {
 
 void write32(u32 val, void * addr) {
         sys_write32(val, (mem_addr_t)addr);
+}
+
+u64 read64(void *addr_high, void *addr_low) {
+        u32 high = sys_read32((mem_addr_t)addr_high);
+        u32 low = sys_read32((mem_addr_t)addr_low);
+        return ((u64)high << 32) | (u64)low;
 }
 
 #else
@@ -43,11 +55,8 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 }
 
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
-        timestamp_t clock;
-        clock = ((u64)read32(xdev->bar[0] + REG_SYS_CLOCK_HI) << 32) |
-                read32(xdev->bar[0] + REG_SYS_CLOCK_LO);
-
-        return clock;
+        return read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
+                      xdev->bar[0] + REG_SYS_CLOCK_LO);
 }
 
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
@@ -79,13 +88,17 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP1_LOW));
+                return read64(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH,
+                              xdev->bar[0] + REG_TX_TIMESTAMP1_LOW);
         case 2:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP2_LOW));
+                return read64(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH,
+                              xdev->bar[0] + REG_TX_TIMESTAMP2_LOW);
         case 3:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP3_LOW));
+                return read64(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH,
+                              xdev->bar[0] + REG_TX_TIMESTAMP3_LOW);
         case 4:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP4_LOW));
+                return read64(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH,
+                              xdev->bar[0] + REG_TX_TIMESTAMP4_LOW);
         default:
                 return 0;
         }
@@ -97,7 +110,8 @@ timestamp_t alinx_read_tx_timestamp(struct pci_dev* pdev, int tx_id) {
 }
 
 u64 alinx_get_buffer_write_status_by_xdev(struct xdma_dev *xdev) {
-        return ((u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
+        return read64(xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_HIGH,
+                      xdev->bar[0] + REG_BUFFER_WRITE_STATUS1_LOW);
 }
 
 u64 alinx_get_buffer_write_status(struct pci_dev *pdev) {
@@ -106,27 +120,33 @@ u64 alinx_get_buffer_write_status(struct pci_dev *pdev) {
 }
 
 u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev) {
-        return ((u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
+        return read64(xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_HIGH,
+                      xdev->bar[0] + REG_TOTAL_NEW_ENTRY_CNT_LOW);
 }
 
 u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev) {
-        return ((u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH) << 32) | (u64)read32(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
+        return read64(xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_HIGH,
+                      xdev->bar[0] + REG_TOTAL_VALID_ENTRY_CNT_LOW);
 }
 
 u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev) {
-        return ((u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
+        return read64(xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_HIGH,
+                      xdev->bar[0] + REG_TOTAL_DROP_ENTRY_CNT_LOW);
 }
 
 u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev) {
-        return ((u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_LOW);
+        return read64(xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_HIGH,
+                      xdev->bar[0] + REG_FBW_ADDR_FIFO_CNT_LOW);
 }
 
 u64 alinx_get_rx_fifo_status_by_xdev(struct xdma_dev *xdev, int port) {
         switch (port) {
         case 0:
-                return ((u64)read32(xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_LOW);
+                return read64(xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_HIGH,
+                              xdev->bar[0] + REG_ETH0_RX_FIFO_STATUS_LOW);
         case 1:
-                return ((u64)read32(xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_HIGH) << 32) + (u64)read32(xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_LOW);
+                return read64(xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_HIGH,
+                              xdev->bar[0] + REG_ETH1_RX_FIFO_STATUS_LOW);
         default:
                 pr_err("Invalid port id: %d\n", port);
                 return 0;

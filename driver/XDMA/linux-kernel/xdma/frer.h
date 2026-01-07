@@ -180,6 +180,15 @@ int frer_get_stream_stats(struct frer_config *frer, struct frer_stream_stats *st
 /* TX path: R-TAG insertion (Talker) */
 int frer_insert_rtag(struct sk_buff *skb, struct frer_stream *stream);
 
+/* TX path: R-TAG insertion with TX metadata offset */
+int frer_insert_rtag_tx(struct sk_buff *skb, struct frer_stream *stream,
+			int frame_offset, int frame_length);
+
+/* Auto-register stream (caller must hold frer->lock) */
+struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
+					      const uint8_t *smac,
+					      const uint8_t *dmac);
+
 /* RX path: R-TAG processing and duplicate elimination (Listener)
  * @port_id: ID of the receiving port (0 or 1), -1 if unknown
  */

@@ -185,7 +185,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_BUSY;
 	}
 
-	/* FRER (802.1CB): Insert R-TAG if stream is configured for sequence generation */
+	/* FRER (802.1CB): Insert R-TAG with auto stream registration */
 	if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
 		struct ethhdr *eth = (struct ethhdr *)(tx_buffer->data);
 		struct frer_stream *stream;
@@ -194,18 +194,23 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		spin_lock_irqsave(&xdev->tsn_config.frer->lock, frer_flags);
 		stream = frer_stream_lookup(xdev->tsn_config.frer, 
 					    eth->h_source, eth->h_dest);
+		
+		/* Auto-register stream if not found */
+		if (!stream)
+			stream = frer_auto_register_stream(xdev->tsn_config.frer,
+							   eth->h_source, eth->h_dest);
+		
 		if (stream && stream->seq_gen.active) {
-			if (frer_insert_rtag(skb, stream) < 0) {
+			/* Use TX-aware R-TAG insertion */
+			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
-#ifdef __LIBXDMA_DEBUG__
-				pr_warn("FRER: R-TAG insertion failed\n");
-#endif
 				netif_wake_subqueue(ndev, q);
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;
 			}
 			/* Update frame length after R-TAG insertion */
 			tx_metadata->frame_length += FRER_RTAG_SIZE;
+			frame_length += FRER_RTAG_SIZE;
 		}
 		spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
 	}

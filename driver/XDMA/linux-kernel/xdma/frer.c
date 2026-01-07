@@ -290,6 +290,40 @@ int frer_add_stream(struct frer_config *frer, const struct frer_stream_config *c
 }
 
 /**
+ * frer_auto_register_stream - Auto-register a stream for R-TAG insertion
+ * @frer: FRER configuration (caller must hold frer->lock)
+ * @smac: Source MAC address
+ * @dmac: Destination MAC address
+ *
+ * Returns pointer to stream on success, NULL on failure.
+ */
+struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
+					      const uint8_t *smac,
+					      const uint8_t *dmac)
+{
+	struct frer_stream *stream;
+	u32 hash;
+
+	if (frer->stream_count >= MAX_FRER_STREAMS)
+		return NULL;
+
+	stream = kzalloc(sizeof(*stream), GFP_ATOMIC);
+	if (!stream)
+		return NULL;
+
+	memcpy(stream->id.smac, smac, ETH_ALEN);
+	memcpy(stream->id.dmac, dmac, ETH_ALEN);
+	stream->seq_gen.next_seq = 0;
+	stream->seq_gen.active = true;
+
+	hash = frer_stream_hash(smac, dmac);
+	hash_add(frer->streams, &stream->hash_node, hash);
+	frer->stream_count++;
+
+	return stream;
+}
+
+/**
  * frer_del_stream - Delete a FRER stream
  * @frer: FRER configuration
  * @id: Stream identifier
@@ -349,6 +383,56 @@ int frer_get_stream_stats(struct frer_config *frer, struct frer_stream_stats *st
 	memcpy(stats->port_stats, stream->seq_recv.port_stats, sizeof(stats->port_stats));
 
 	spin_unlock_irqrestore(&frer->lock, flags);
+
+	return 0;
+}
+
+/**
+ * frer_insert_rtag_tx - Insert R-TAG for TX path (TX metadata aware)
+ * @skb: Socket buffer with TX_METADATA prepended
+ * @stream: Stream entry with sequence generation state
+ * @frame_offset: Offset to frame data from skb->data (TX_METADATA_SIZE)
+ * @frame_length: Current frame length (excluding metadata)
+ *
+ * For TX path where skb->data points to TX_METADATA, not ethernet header.
+ * Returns 0 on success, negative error code on failure.
+ */
+int frer_insert_rtag_tx(struct sk_buff *skb, struct frer_stream *stream,
+			int frame_offset, int frame_length)
+{
+	uint8_t *frame = skb->data + frame_offset;
+	struct ethhdr *eth = (struct ethhdr *)frame;
+	struct frer_rtag rtag;
+	__be16 orig_proto;
+	int payload_len;
+
+	if (!stream->seq_gen.active)
+		return 0;
+
+	/* Check tailroom */
+	if (skb_tailroom(skb) < FRER_RTAG_SIZE)
+		return -ENOMEM;
+
+	orig_proto = eth->h_proto;
+	payload_len = frame_length - ETH_HLEN;
+
+	/* Shift payload to make room for R-TAG after ETH header */
+	memmove(frame + ETH_HLEN + FRER_RTAG_SIZE, frame + ETH_HLEN, payload_len);
+
+	/* Build R-TAG */
+	rtag.ethertype = htons(ETH_P_RTAG);
+	rtag.reserved = 0;
+	rtag.seq_num = htons(stream->seq_gen.next_seq++);
+
+	/* Insert R-TAG after ETH header */
+	memcpy(frame + ETH_HLEN, &rtag, FRER_RTAG_SIZE);
+
+	/* Update EtherType to R-TAG, put original after R-TAG */
+	eth->h_proto = htons(ETH_P_RTAG);
+	*(__be16 *)(frame + ETH_HLEN + FRER_RTAG_SIZE) = orig_proto;
+
+	/* Extend skb length */
+	skb_put(skb, FRER_RTAG_SIZE);
 
 	return 0;
 }

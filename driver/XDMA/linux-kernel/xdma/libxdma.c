@@ -72,11 +72,6 @@ module_param(rx_poll_mode, uint, 0644);
 MODULE_PARM_DESC(rx_poll_mode,
 		 "Use polling for RX (both ports), default is 1 (enabled)");
 
-unsigned int enable_cb = 0;
-module_param(enable_cb, uint, 0644);
-MODULE_PARM_DESC(enable_cb,
-		 "Enable 802.1CB (FRER) duplicate elimination, default is 0 (disabled)");
-
 #define XDMA_PERF_NUM_DESC 128
 
 /* Kernel version adaptative code */
@@ -1576,7 +1571,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		skb->dev = ndev;
 
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
-		if (enable_cb && xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
+		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
 			int rx_port_id = priv->rx_port;
 			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
 			if (frer_result == FRER_DROP_DUPLICATE ||

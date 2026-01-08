@@ -590,9 +590,9 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 			/* No R-TAG present */
 			return FRER_PASS;
 		}
-		rtag_offset = ETH_HLEN + VLAN_HLEN;
+		rtag_offset = ETH_HLEN - sizeof(__be16) + VLAN_HLEN;
 	} else if (ntohs(proto) == ETH_P_RTAG) {
-		rtag_offset = ETH_HLEN;
+		rtag_offset = ETH_HLEN - sizeof(__be16);
 	} else {
 		/* No R-TAG present */
 		return FRER_PASS;
@@ -712,7 +712,7 @@ strip_rtag:
 		skb_trim(skb, skb->len - FRER_RTAG_SIZE);
 	} else {
 		/* Non-VLAN: restore original ethertype */
-		__be16 orig_proto = *(__be16 *)((uint8_t *)rtag + sizeof(struct frer_rtag) - sizeof(__be16));
+		__be16 orig_proto = *(__be16 *)((uint8_t *)rtag + sizeof(struct frer_rtag));
 
 		/* Shift the header to cover R-TAG */
 		memmove(skb->data + FRER_RTAG_SIZE, skb->data, ETH_HLEN);

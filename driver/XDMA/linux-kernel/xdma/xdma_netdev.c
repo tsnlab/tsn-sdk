@@ -320,7 +320,7 @@ static int xdma_set_ts_config(struct net_device *ndev, struct ifreq *ifr) {
         return copy_from_user(config, ifr->ifr_data, sizeof(*config)) ? -EFAULT : 0;
 }
 
-static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr) {
+static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
 	struct xdma_dev *xdev = priv->xdev;
 	struct frer_stream_config config;
@@ -329,14 +329,14 @@ static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr) {
 		return -ENODEV;
 	}
 
-	if (copy_from_user(&config, ifr->ifr_data, sizeof(config))) {
+	if (copy_from_user(&config, data, sizeof(config))) {
 		return -EFAULT;
 	}
 
 	return frer_add_stream(xdev->tsn_config.frer, &config);
 }
 
-static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr) {
+static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
 	struct xdma_dev *xdev = priv->xdev;
 	struct frer_stream_id id;
@@ -345,14 +345,14 @@ static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr) {
 		return -ENODEV;
 	}
 
-	if (copy_from_user(&id, ifr->ifr_data, sizeof(id))) {
+	if (copy_from_user(&id, data, sizeof(id))) {
 		return -EFAULT;
 	}
 
 	return frer_del_stream(xdev->tsn_config.frer, &id);
 }
 
-static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr) {
+static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
 	struct xdma_dev *xdev = priv->xdev;
 	struct frer_stream_stats stats;
@@ -362,7 +362,7 @@ static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr) {
 		return -ENODEV;
 	}
 
-	if (copy_from_user(&stats, ifr->ifr_data, sizeof(stats))) {
+	if (copy_from_user(&stats, data, sizeof(stats))) {
 		return -EFAULT;
 	}
 
@@ -371,14 +371,14 @@ static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr) {
 		return ret;
 	}
 
-	if (copy_to_user(ifr->ifr_data, &stats, sizeof(stats))) {
+	if (copy_to_user(data, &stats, sizeof(stats))) {
 		return -EFAULT;
 	}
 
 	return 0;
 }
 
-static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr) {
+static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
 	struct xdma_dev *xdev = priv->xdev;
 	int enable;
@@ -387,7 +387,7 @@ static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr) {
 		return -ENODEV;
 	}
 
-	if (copy_from_user(&enable, ifr->ifr_data, sizeof(enable))) {
+	if (copy_from_user(&enable, data, sizeof(enable))) {
 		return -EFAULT;
 	}
 
@@ -403,14 +403,21 @@ int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd) {
 		return xdma_get_ts_config(ndev, ifr);
 	case SIOCSHWTSTAMP:
 		return xdma_set_ts_config(ndev, ifr);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+int xdma_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr, void *data, int cmd) {
+	switch (cmd) {
 	case SIOC_FRER_ADD_STREAM:
-		return frer_ioctl_add_stream(ndev, ifr);
+		return frer_ioctl_add_stream(ndev, ifr, data);
 	case SIOC_FRER_DEL_STREAM:
-		return frer_ioctl_del_stream(ndev, ifr);
+		return frer_ioctl_del_stream(ndev, ifr, data);
 	case SIOC_FRER_GET_STATS:
-		return frer_ioctl_get_stats(ndev, ifr);
+		return frer_ioctl_get_stats(ndev, ifr, data);
 	case SIOC_FRER_ENABLE:
-		return frer_ioctl_enable(ndev, ifr);
+		return frer_ioctl_enable(ndev, ifr, data);
 	default:
 		return -EOPNOTSUPP;
 	}

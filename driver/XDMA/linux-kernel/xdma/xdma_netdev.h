@@ -168,6 +168,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void *type_data);
 
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd);
+int xdma_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr, void *data, int cmd);
 u16 xdma_select_queue(struct net_device *ndev, struct sk_buff *skb, struct net_device *sb_dev);
 
 void xdma_tx_work1(struct work_struct *work);

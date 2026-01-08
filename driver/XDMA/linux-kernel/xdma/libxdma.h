@@ -692,6 +692,8 @@ static inline void xdma_device_flag_clear(struct xdma_dev *xdev, unsigned int f)
 void write_register(u32 value, void *iomem);
 u32 read_register(void *iomem);
 
+int engine_status_read(struct xdma_engine* engine, bool clear, bool dump);
+
 struct xdma_dev *xdev_find_by_pdev(struct pci_dev *pdev);
 
 void xdma_device_offline(struct pci_dev *pdev, void *dev_handle);

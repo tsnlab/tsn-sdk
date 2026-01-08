@@ -516,7 +516,7 @@ static void engine_status_dump(struct xdma_engine *engine)
  *
  * @return error value on failure, 0 otherwise
  */
-static int engine_status_read(struct xdma_engine *engine, bool clear, bool dump)
+int engine_status_read(struct xdma_engine* engine, bool clear, bool dump) 
 {
 	int rv = 0;
 

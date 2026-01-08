@@ -363,7 +363,7 @@ static int xdma_process_rx_packet(struct xdma_private* priv, u32 done_idx)
     if (unlikely(!ndev || !result || !rx_buffer))
         return -EINVAL;
 
-#if XDMA_TX_CANARY_TEST
+#if XDMA_CANARY_TEST
     /*
      * Canary check BEFORE using result/payload.
      * If this fails, treat it as DMA corruption evidence.
@@ -417,7 +417,7 @@ static int xdma_process_rx_packet(struct xdma_private* priv, u32 done_idx)
     skb->protocol = eth_type_trans(skb, ndev);
     netif_receive_skb(skb);
 
-#if XDMA_TX_CANARY_TEST
+#if XDMA_CANARY_TEST
     /*
      * Optional: Canary check AFTER copy.
      * Useful to detect concurrent overwrite while CPU was copying.
@@ -726,6 +726,8 @@ int xdma_netdev_open(struct net_device* ndev) {
     netif_start_queue(ndev);
 
     pr_info("xdma_netdev_open(): carrier ON + TX queues started\n");
+
+    ndev->watchdog_timeo = msecs_to_jiffies(1000);
     return 0;
 }
 
@@ -1134,7 +1136,30 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
     ring->head = next_head;
     // pr_info("[TX-XMIT] xdma_netdev_start_xmit exit\n");
     spin_unlock_bh(&priv->tx_lock);
+
+    netif_trans_update(ndev);
     return NETDEV_TX_OK;
+}
+
+/* timeout handler */
+void xdma_netdev_tx_timeout(struct net_device* ndev, unsigned int txq) 
+{
+    struct xdma_private* priv = netdev_priv(ndev);
+
+    netif_tx_stop_all_queues(ndev);
+
+    netdev_err(ndev, "TX timeout detected %u\n");
+
+    // dump xdma all registers
+    engine_status_read(priv->tx_engine, 0, 1);
+
+    engine_status_read(priv->rx_engine, 0, 1);
+
+    // dump device driver status
+    // netdev_info(ndev, "SW Stats: Last XMIT jiffies: %lu\n", ndev->trans_start);
+
+    // restore net device
+    // schedule_work(&priv->reset_work);
 }
 
 u16 xdma_select_queue(struct net_device *ndev, struct sk_buff *skb, struct net_device *sb_dev) {

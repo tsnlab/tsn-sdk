@@ -62,6 +62,8 @@ struct xdma_private {
         int irq;
         int rx_count;
 
+        int port_id;    /* Port ID for FRER (0 or 1) */
+
         struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
         struct sk_buff *tx_work_skb[TSN_TIMESTAMP_ID_MAX];
         sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];
@@ -69,6 +71,11 @@ struct xdma_private {
         struct hwtstamp_config tstamp_config;
         sysclock_t last_tx_tstamp[TSN_TIMESTAMP_ID_MAX];
         int tstamp_retry[TSN_TIMESTAMP_ID_MAX];
+
+        struct delayed_work rx_poll_work;
+
+        int tx_port;
+        int rx_port;
 
         uint64_t total_tx_count;
         uint64_t total_tx_drop_count;
@@ -161,6 +168,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void *type_data);
 
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd);
+int xdma_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr, void *data, int cmd);
 u16 xdma_select_queue(struct net_device *ndev, struct sk_buff *skb, struct net_device *sb_dev);
 
 void xdma_tx_work1(struct work_struct *work);

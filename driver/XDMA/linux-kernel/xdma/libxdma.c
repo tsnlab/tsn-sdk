@@ -27,13 +27,16 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 #include <linux/ptp_classify.h>
+#include <linux/jiffies.h>
 
+#include "alinx_arch.h"
 #include "libxdma.h"
 #include "libxdma_api.h"
 #include "cdev_sgdma.h"
 #include "xdma_thread.h"
 #include "xdma_netdev.h"
 #include "tsn.h"
+#include "frer.h"
 
 
 #ifdef __LIBXDMA_DEBUG__
@@ -63,6 +66,11 @@ unsigned int desc_blen_max = XDMA_DESC_BLEN_MAX;
 module_param(desc_blen_max, uint, 0644);
 MODULE_PARM_DESC(desc_blen_max,
 		 "per descriptor max. buffer length, default is (1 << 28) - 1");
+
+unsigned int rx_poll_mode = 1;
+module_param(rx_poll_mode, uint, 0644);
+MODULE_PARM_DESC(rx_poll_mode,
+		 "Use polling for RX (both ports), default is 1 (enabled)");
 
 #define XDMA_PERF_NUM_DESC 128
 
@@ -1393,6 +1401,80 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 }
 
 /*
+ * xdma_rx_poll_work - Poll work for multi-port RX
+ *
+ * This work function monitors FIFO status on both ports and switches
+ * the RX port as needed. After switching ports, it restarts the DMA engine
+ * to trigger a transfer for data already in the FIFO (which won't generate
+ * an interrupt on its own since the port was switched after data arrived).
+ */
+static unsigned long last_switch_jiffies = 0;
+#define RX_PORT_SWITCH_INTERVAL_MS 2  /* Switch ports every 2ms for fast round-robin */
+
+void xdma_rx_poll_work(struct work_struct *work) {
+	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
+	struct xdma_private* priv = container_of(delayed_work, struct xdma_private, rx_poll_work);
+	struct xdma_dev *xdev = priv->xdev;
+	struct net_device *ndev = xdev->ndev;
+	struct xdma_engine *engine = &xdev->engine_c2h[0];
+	unsigned long flags;
+	int target_port;
+	unsigned long now_j = jiffies;
+
+	if (!rx_poll_mode) {
+		schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
+		return;
+	}
+
+	if (!ndev || !netif_running(ndev)) {
+		schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
+		return;
+	}
+
+	/* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
+	{
+		unsigned long since_switch = jiffies_to_msecs(now_j - last_switch_jiffies);
+		if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
+			target_port = (priv->rx_port == 0) ? 1 : 0;
+		} else {
+			target_port = priv->rx_port;
+		}
+	}
+
+	/* Switch port if needed and restart DMA to trigger transfer */
+	if (priv->rx_port != target_port) {
+		u32 tx_port_bits = (priv->tx_port == 0) ? TSN_TX_PORT0 : TSN_TX_PORT1;
+		u32 rx_port_bits = (target_port == 0) ? TSN_RX_PORT0 : TSN_RX_PORT1;
+		u32 lo, hi;
+
+		spin_lock_irqsave(&priv->rx_lock, flags);
+
+		/* Stop DMA first */
+		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+
+		/* Switch the port */
+		iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
+			  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+		priv->rx_port = target_port;
+		last_switch_jiffies = now_j;
+
+		/* Full DMA restart: clear status and re-write descriptor address */
+		ioread32(&engine->regs->status_rc);
+		lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
+		hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
+		iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
+		iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
+		channel_interrupts_enable(xdev, engine->irq_bitmask);
+		iowrite32(DMA_ENGINE_START, &engine->regs->control);
+
+		spin_unlock_irqrestore(&priv->rx_lock, flags);
+	}
+
+	/* Reschedule poll work */
+	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+}
+
+/*
  * xdma_isr() - Interrupt handler
  *
  * @dev_id pointer to xdma_dev
@@ -1450,8 +1532,10 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	priv = netdev_priv(ndev);
 	mask = ch_irq & xdev->mask_irq_c2h;
 	if (mask) {
-		dbg_info("xdma_isr c2h");
 		engine = &xdev->engine_c2h[0];
+
+		/* Always handle RX in ISR - poll work only switches ports */
+		dbg_info("xdma_isr c2h");
 		result = priv->res;
 		rx_buffer = (struct rx_buffer*)priv->rx_buffer;
 
@@ -1460,7 +1544,6 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 #endif
 		spin_lock_irqsave(&priv->rx_lock, flag);
 		engine_status_read(engine, 1, 0);
-		// skb_len = rx_buffer->metadata.frame_length - CRC_LEN;
 		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
 		if (skb_len < 0) {
 			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
@@ -1479,23 +1562,33 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			pr_err("Failed to allocate skb\n");
 			return IRQ_NONE;
 		}
-		memcpy(
-			skb_put(skb, skb_len),
-			priv->rx_buffer + RX_METADATA_SIZE,
-			skb_len);
+		memcpy(skb_put(skb, skb_len),
+		       priv->rx_buffer + RX_METADATA_SIZE,
+		       skb_len);
 		if (filter_rx_timestamp(priv, skb)) {
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
 		}
 		skb->dev = ndev;
-		skb->protocol = eth_type_trans(skb, ndev);
 
-		/* Transfer the skb to the Linux network stack */
+		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
+		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
+			int rx_port_id = priv->rx_port;
+			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
+			if (frer_result == FRER_DROP_DUPLICATE ||
+			    frer_result == FRER_DROP_OUT_OF_WINDOW) {
+				dev_kfree_skb(skb);
+				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+				iowrite32(DMA_ENGINE_START, &engine->regs->control);
+				spin_unlock_irqrestore(&priv->rx_lock, flag);
+				return IRQ_HANDLED;
+			}
+		}
+
+		skb->protocol = eth_type_trans(skb, ndev);
 		netif_rx(skb);
 
-		/* Stop the engine */
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-
-		/* Start the engine */
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 		iowrite32(DMA_ENGINE_START, &engine->regs->control);
 		spin_unlock_irqrestore(&priv->rx_lock, flag);
@@ -1915,8 +2008,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 		rv = pci_enable_msix(pdev, xdev->entry, req_nvec);
 #endif
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI-X mode: %d\n", rv);
+		}
 
 		xdev->msix_enabled = 1;
 
@@ -1925,8 +2019,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 		/* enable message signalled interrupts */
 		dbg_init("pci_enable_msi()\n");
 		rv = pci_enable_msi(pdev);
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI mode: %d\n", rv);
+		}
 		xdev->msi_enabled = 1;
 
 	} else {
@@ -2186,10 +2281,11 @@ static int irq_msi_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, 0, xdev->mod_name, xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2227,10 +2323,11 @@ static int irq_legacy_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, IRQF_SHARED, xdev->mod_name,
 			 xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2697,12 +2794,13 @@ struct xdma_transfer *engine_cyclic_stop(struct xdma_engine *engine)
 		}
 
 		if (transfer->cyclic) {
-			if (engine->xdma_perf)
+			if (engine->xdma_perf) {
 				dbg_perf("Stopping perf transfer on %s\n",
 					 engine->name);
-			else
+			} else {
 				dbg_perf("Stopping cyclic transfer on %s\n",
 					 engine->name);
+			}
 			/* free up the buffer allocated for perf run */
 			if (engine->perf_buf_virt)
 				dma_free_coherent(&engine->xdev->pdev->dev,

@@ -226,6 +226,7 @@ static const struct net_device_ops xdma_netdev_ops = {
 	.ndo_start_xmit = xdma_netdev_start_xmit,
 	.ndo_setup_tc = xdma_netdev_setup_tc,
 	.ndo_eth_ioctl = xdma_netdev_ioctl,
+	.ndo_siocdevprivate = xdma_netdev_siocdevprivate,
 	.ndo_select_queue = xdma_select_queue,
 };
 
@@ -352,8 +353,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	dev_set_drvdata(&pdev->dev, xpdev);
 
-	/* Set the TSN register to 0x1 */
-	iowrite32(TSN_ENABLE, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	/* Enable TSN and use Port 1 */
+	iowrite32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT0, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 
 	/* Allocate the network device */
 	/* TC command requires multiple TX queues */
@@ -375,7 +376,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	xdev->ndev = ndev;
-	xpdev->ndev = ndev;
+	xpdev->ndev[0] = ndev;
 
 	/* Set up the network interface */
 	ndev->netdev_ops = &xdma_netdev_ops;
@@ -441,6 +442,11 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
+	INIT_DELAYED_WORK(&priv->rx_poll_work, xdma_rx_poll_work);
+	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+
+	priv->tx_port = 0;
+	priv->rx_port = 0;
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);
 	if (!ptp_data) {
@@ -487,7 +493,7 @@ static void remove_one(struct pci_dev *pdev)
 	pr_info("pdev 0x%p, xdev 0x%p, 0x%p.\n",
 		pdev, xpdev, xpdev->xdev);
 
-	ndev = xpdev->ndev;
+	ndev = xpdev->ndev[0];
 	if (!ndev) {
 		pr_err("ndev is NULL\n");
 		return;
@@ -495,6 +501,7 @@ static void remove_one(struct pci_dev *pdev)
 	priv = netdev_priv(ndev);
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
+	cancel_delayed_work(&priv->rx_poll_work);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
 	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);

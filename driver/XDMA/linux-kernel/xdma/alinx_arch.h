@@ -11,41 +11,63 @@ typedef uint32_t u32
 
 #include <linux/pci.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/hashtable.h>
 #include <net/pkt_sched.h>
 
-#define REG_NEXT_PULSE_AT_HI 0x002c  /* These are not updated yet */
-#define REG_NEXT_PULSE_AT_LO 0x0030  /* These are not updated yet */
-#define REG_CYCLE_1S 0x0034          /* These are not updated yet */
-#define REG_SYS_CLOCK_HI 0x0288
-#define REG_SYS_CLOCK_LO 0x028c
+#define REG_NEXT_PULSE_AT_HI 0x0018
+#define REG_NEXT_PULSE_AT_LO 0x001c
+#define REG_CYCLE_1S_HI 0x0020
+#define REG_CYCLE_1S_LO 0x0024
+#define REG_SYS_CLOCK_HI 0x0058
+#define REG_SYS_CLOCK_LO 0x005c
 
-#define REG_TX_TIMESTAMP1_HIGH 0x01d8
-#define REG_TX_TIMESTAMP1_LOW 0x01dc
-#define REG_TX_TIMESTAMP2_HIGH 0x01e0
-#define REG_TX_TIMESTAMP2_LOW 0x01e4
-#define REG_TX_TIMESTAMP3_HIGH 0x01e8
-#define REG_TX_TIMESTAMP3_LOW 0x01ec
-#define REG_TX_TIMESTAMP4_HIGH 0x01f0
-#define REG_TX_TIMESTAMP4_LOW 0x01f4
+#define REG_TX_TIMESTAMP1_HIGH 0x02d0
+#define REG_TX_TIMESTAMP1_LOW 0x02d4
+#define REG_TX_TIMESTAMP2_HIGH 0x02d8
+#define REG_TX_TIMESTAMP2_LOW 0x02dc
+#define REG_TX_TIMESTAMP3_HIGH 0x02e0
+#define REG_TX_TIMESTAMP3_LOW 0x02e4
+#define REG_TX_TIMESTAMP4_HIGH 0x02e8
+#define REG_TX_TIMESTAMP4_LOW 0x02ec
 
-#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0160
-#define REG_BUFFER_WRITE_STATUS1_LOW 0x0164
+#define REG_BUFFER_WRITE_STATUS1_HIGH 0x0258
+#define REG_BUFFER_WRITE_STATUS1_LOW 0x025c
 
-#define REG_TOTAL_NEW_ENTRY_CNT_HIGH 0x0120
-#define REG_TOTAL_NEW_ENTRY_CNT_LOW 0x0124
+#define REG_TOTAL_NEW_ENTRY_CNT_HIGH 0x0228
+#define REG_TOTAL_NEW_ENTRY_CNT_LOW 0x022c
 
-#define REG_TOTAL_VALID_ENTRY_CNT_HIGH 0x0128
-#define REG_TOTAL_VALID_ENTRY_CNT_LOW 0x012c
+#define REG_TOTAL_VALID_ENTRY_CNT_HIGH 0x0230
+#define REG_TOTAL_VALID_ENTRY_CNT_LOW 0x0234
 
-#define REG_TOTAL_DROP_ENTRY_CNT_HIGH 0x0138
-#define REG_TOTAL_DROP_ENTRY_CNT_LOW 0x013c
+#define REG_TOTAL_DROP_ENTRY_CNT_HIGH 0x0238
+#define REG_TOTAL_DROP_ENTRY_CNT_LOW 0x023c
 
-#define REG_TSN_SYSTEM_CONTROL_HIGH 0x0290
-#define REG_TSN_SYSTEM_CONTROL_LOW 0x0294
+#define REG_TSN_SYSTEM_CONTROL_HIGH 0x0000
+#define REG_TSN_SYSTEM_CONTROL_LOW 0x0004
+
+#define REG_FBW_ADDR_FIFO_CNT_HIGH 0x0270
+#define REG_FBW_ADDR_FIFO_CNT_LOW 0x0274
+
+#define REG_ETH0_RX_FIFO_STATUS_HIGH 0x00f0
+#define REG_ETH0_RX_FIFO_STATUS_LOW 0x00f4
+
+#define REG_ETH1_RX_FIFO_STATUS_HIGH 0x0188
+#define REG_ETH1_RX_FIFO_STATUS_LOW 0x018c
 
 #define FIFO_DATA_CNT_MASK 0x00ff
 
 #define TSN_ENABLE 0x1
+/* Bit 1: RX port select (0=port A, 1=port B) */
+/* Bit 2: TX port select (0=port A, 1=port B) */
+#define TSN_TX_PORT0 0b000
+#define TSN_TX_PORT1 0b100
+#define TSN_RX_PORT0 0b00
+#define TSN_RX_PORT1 0b10
+
+#define TSN_TX_PORT(n) (TSN_TX_PORT##n)
+#define TSN_RX_PORT(n) (TSN_RX_PORT##n)
+
+#define RX_POLL_WORK_INTERVAL_US (100)
 
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
@@ -66,6 +88,10 @@ typedef uint32_t u32
 #define TC_COUNT 8
 #define TSN_PRIO_COUNT 8
 #define MAX_QBV_SLOTS 20
+
+/* FRER (802.1CB) configuration limits */
+#define MAX_FRER_STREAMS 64
+#define FRER_HASH_BITS 6
 
 #define ETHERNET_GAP_SIZE (8 + 4 + 12) // 8 bytes preamble, 4 bytes FCS, 12 bytes interpacket gap
 #define PHY_DELAY_CLOCKS 13 // 14 clocks from MAC to PHY, but sometimes there is 1 tick error
@@ -131,6 +157,9 @@ struct qav_state {
 	timestamp_t available_at;
 };
 
+/* FRER (802.1CB) configuration - forward declaration */
+struct frer_config;
+
 struct tsn_config {
 	struct qbv_config qbv;
 	struct qbv_baked_config qbv_baked;
@@ -138,10 +167,14 @@ struct tsn_config {
 	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
+
+	/* FRER (802.1CB) configuration */
+	struct frer_config *frer;
 };
 
 u32 read32(void * addr);
 void write32(u32 val, void * addr);
+u64 read64(void *addr_high, void *addr_low);
 
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time);
 void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time);
@@ -158,6 +191,8 @@ u64 alinx_get_buffer_write_status(struct pci_dev *pdev);
 u64 alinx_get_total_new_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_valid_entry_by_xdev(struct xdma_dev *xdev);
 u64 alinx_get_total_drop_entry_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_fifo_cnt_by_xdev(struct xdma_dev *xdev);
+u64 alinx_get_rx_fifo_status_by_xdev(struct xdma_dev *xdev, int port_id);
 
 void dump_buffer(unsigned char* buffer, int len);
 

@@ -28,6 +28,7 @@ pub struct TsnSocket {
 
 mod cbs;
 mod config;
+pub mod frer;
 mod tas;
 pub mod time;
 mod vlan;

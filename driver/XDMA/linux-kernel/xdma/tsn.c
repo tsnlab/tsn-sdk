@@ -1,11 +1,13 @@
 #include <linux/if_ether.h>
 #include <linux/string.h>
+#include <linux/slab.h>
 
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
 #include "xdma_netdev.h"
 #include "libxdma.h"
 #include "tsn.h"
+#include "frer.h"
 
 #define NS_IN_1S 1000000000
 
@@ -24,7 +26,7 @@ static uint64_t bytes_to_ns(uint64_t bytes);
 static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint8_t tc_id, uint64_t bytes);
 static bool get_timestamps(struct timestamps* timestamps, const struct tsn_config* tsn_config, timestamp_t from, uint8_t tc_id, uint64_t bytes, bool consider_delay);
 
-static void update_buffer(struct xdma_dev* xdev);
+static void update_buffer(struct xdma_dev* xdev, uint32_t min_space);
 static void decrease_buffer_space(struct xdma_dev* xdev);
 static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space);
 
@@ -100,10 +102,24 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 	duration_ns = bytes_to_ns(metadata->frame_length);
 
-	if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
+	if (is_gptp) {
+		timestamps.from = from;
+		timestamps.to = TSN_ALWAYS_OPEN(from);
+		timestamps.delay_from = from;
+		timestamps.delay_to = TSN_ALWAYS_OPEN(from);
+		metadata->fail_policy = TSN_FAIL_POLICY_RETRY;
+	} else if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
-		timestamps.from = tsn_config->total_available_at;
-		timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
+		// timestamps.from = tsn_config->total_available_at;
+		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
+
+		if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
+			return false;
+		}
+		timestamps.from = from;
+		timestamps.to = TSN_ALWAYS_OPEN(from);
+		timestamps.delay_from = from;
+		timestamps.delay_to = TSN_ALWAYS_OPEN(from);
 		metadata->fail_policy = TSN_FAIL_POLICY_DROP;
 	} else {
 		if (tsn_config->qav[tc_id].enabled == true && tsn_config->qav[tc_id].available_at > from) {
@@ -184,32 +200,52 @@ void tsn_init_configs(struct pci_dev* pdev) {
 		config->qav[0].send_slope = -90;
 	}
 
+	// Initialize FRER (802.1CB) configuration
+	config->frer = kzalloc(sizeof(struct frer_config), GFP_KERNEL);
+	if (config->frer) {
+		frer_init(config->frer);
+		pr_info("FRER (802.1CB) initialized (disabled)\n");
+	} else {
+		pr_warn("Failed to allocate FRER configuration\n");
+	}
+
 	bake_qos_config(config);
 }
 
-static void bake_qos_config(struct tsn_config* config) {
-	int slot_id, tc_id; // Iterators
-	bool qav_disabled = true;
-	struct qbv_baked_config* baked;
-	if (config->qbv.enabled == false) {
-		// TODO: remove this when throughput issue without QoS gets resolved
-		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-			if (config->qav[tc_id].enabled) {
-				qav_disabled = false;
-				break;
-			}
-		}
+void tsn_cleanup_configs(struct pci_dev* pdev) {
+	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	struct tsn_config* config = &xdev->tsn_config;
 
-		if (qav_disabled) {
-			config->qbv.enabled = true;
-			config->qbv.start = 0;
-			config->qbv.slot_count = 1;
-			config->qbv.slots[0].duration_ns = 1000000000; // 1s
-			for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-				config->qbv.slots[0].opened_prios[tc_id] = true;
-			}
-		}
+	if (config->frer) {
+		frer_cleanup(config->frer);
+		kfree(config->frer);
+		config->frer = NULL;
+		pr_info("FRER (802.1CB) cleanup complete\n");
 	}
+}
+
+static void bake_qos_config(struct tsn_config* config) {
+	int slot_id, tc_id;
+	struct qbv_baked_config* baked;
+	// if (config->qbv.enabled == false) {
+	// 	// TODO: remove this when throughput issue without QoS gets resolved
+	// 	for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 		if (config->qav[tc_id].enabled) {
+	// 			qav_disabled = false;
+	// 			break;
+	// 		}
+	// 	}
+
+	// 	if (qav_disabled) {
+	// 		config->qbv.enabled = true;
+	// 		config->qbv.start = 0;
+	// 		config->qbv.slot_count = 1;
+	// 		config->qbv.slots[0].duration_ns = 1000000000; // 1s
+	// 		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 			config->qbv.slots[0].opened_prios[tc_id] = true;
+	// 		}
+	// 	}
+	// }
 
 	baked = &config->qbv_baked;
 	memset(baked, 0, sizeof(struct qbv_baked_config));
@@ -416,12 +452,10 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 	return true;
 }
 
-static void update_buffer(struct xdma_dev* xdev) {
-	if (xdev->tsn_config.buffer_space < HW_QUEUE_SIZE_PAD) {
-		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
-		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
-		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
-		xdev->tsn_config.buffer_space = HW_QUEUE_SIZE - (u32)(total_pkts - sent_pkts - dropped_pkts);
+static void update_buffer(struct xdma_dev* xdev, uint32_t min_space) {
+	uint32_t threshold = min_space > HW_QUEUE_SIZE_PAD ? min_space : HW_QUEUE_SIZE_PAD;
+	if (xdev->tsn_config.buffer_space <= threshold) {
+		xdev->tsn_config.buffer_space = (u32)alinx_get_fifo_cnt_by_xdev(xdev);
 	}
 }
 
@@ -430,7 +464,7 @@ static void decrease_buffer_space(struct xdma_dev* xdev) {
 }
 
 static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space) {
-	update_buffer(xdev);
+	update_buffer(xdev, min_space);
 	return xdev->tsn_config.buffer_space > min_space;
 }
 

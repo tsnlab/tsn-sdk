@@ -55,7 +55,7 @@ int xdma_tx_ring_init(struct xdma_tx_ring* ring, struct device* dev) {
     spin_lock_init(&ring->lock);
 
     /* payload(XDMA_TX_BUF_SIZE) + head/tail guard */
-#if XDMA_TX_CANARY_TEST
+#if XDMA_CANARY_TEST
     alloc_sz = XDMA_TX_BUF_SIZE + (2 * XDMA_TX_GUARD_SZ);
 #else
     alloc_sz = XDMA_TX_BUF_SIZE;
@@ -80,7 +80,7 @@ int xdma_tx_ring_init(struct xdma_tx_ring* ring, struct device* dev) {
         ring->slot[i].vaddr = (u8*)ring->slot[i].raw_vaddr + XDMA_TX_GUARD_SZ;
         ring->slot[i].dma = ring->slot[i].raw_dma + XDMA_TX_GUARD_SZ;
 
-#if XDMA_TX_CANARY_TEST
+#if XDMA_CANARY_TEST
         /* Initialize guards once (per-slot). We will typically re-fill per packet in xmit. */
         xdma_tx_guard_fill(ring->slot[i].raw_vaddr, XDMA_TX_BUF_SIZE);
 #endif
@@ -129,7 +129,7 @@ void xdma_tx_ring_cleanup(struct xdma_tx_ring* ring) {
         return;
 
     /* Must match allocation size in xdma_tx_ring_init() */
-#if XDMA_TX_CANARY_TEST
+#if XDMA_CANARY_TEST
     alloc_sz = XDMA_TX_BUF_SIZE + (2 * XDMA_TX_GUARD_SZ);
 #else
     alloc_sz = XDMA_TX_BUF_SIZE;

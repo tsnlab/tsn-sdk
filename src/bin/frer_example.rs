@@ -27,11 +27,14 @@ use std::env;
 use std::process::exit;
 
 // Import from the tsn_sdk crate
-use tsn_sdk::frer::{FrerController, FrerStreamConfig, parse_mac, format_mac};
+use tsn_sdk::frer::{format_mac, parse_mac, FrerController, FrerStreamConfig};
 
 fn print_usage(program: &str) {
     eprintln!("FRER (IEEE 802.1CB) Configuration Tool\n");
-    eprintln!("Usage: {} <interface> <mode> [src_mac] [dst_mac]\n", program);
+    eprintln!(
+        "Usage: {} <interface> <mode> [src_mac] [dst_mac]\n",
+        program
+    );
     eprintln!("Modes:");
     eprintln!("  talker   - Enable R-TAG insertion (sequence generation)");
     eprintln!("  listener - Enable duplicate elimination (sequence recovery)");
@@ -41,9 +44,18 @@ fn print_usage(program: &str) {
     eprintln!("  enable   - Enable FRER globally");
     eprintln!("  disable  - Disable FRER globally\n");
     eprintln!("Examples:");
-    eprintln!("  {} eth0 talker 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF", program);
-    eprintln!("  {} eth0 listener 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF", program);
-    eprintln!("  {} eth0 stats 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF", program);
+    eprintln!(
+        "  {} eth0 talker 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF",
+        program
+    );
+    eprintln!(
+        "  {} eth0 listener 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF",
+        program
+    );
+    eprintln!(
+        "  {} eth0 stats 00:11:22:33:44:55 AA:BB:CC:DD:EE:FF",
+        program
+    );
     eprintln!("  {} eth0 enable", program);
 }
 
@@ -68,25 +80,21 @@ fn main() {
     };
 
     match mode.as_str() {
-        "enable" => {
-            match frer.set_enabled(true) {
-                Ok(_) => println!("FRER enabled on {}", ifname),
-                Err(e) => {
-                    eprintln!("Failed to enable FRER: {}", e);
-                    exit(1);
-                }
+        "enable" => match frer.set_enabled(true) {
+            Ok(_) => println!("FRER enabled on {}", ifname),
+            Err(e) => {
+                eprintln!("Failed to enable FRER: {}", e);
+                exit(1);
             }
-        }
+        },
 
-        "disable" => {
-            match frer.set_enabled(false) {
-                Ok(_) => println!("FRER disabled on {}", ifname),
-                Err(e) => {
-                    eprintln!("Failed to disable FRER: {}", e);
-                    exit(1);
-                }
+        "disable" => match frer.set_enabled(false) {
+            Ok(_) => println!("FRER disabled on {}", ifname),
+            Err(e) => {
+                eprintln!("Failed to disable FRER: {}", e);
+                exit(1);
             }
-        }
+        },
 
         "talker" | "listener" | "both" | "stats" | "delete" => {
             if args.len() < 5 {
@@ -172,25 +180,29 @@ fn main() {
                     }
                 }
 
-                "stats" => {
-                    match frer.get_stats(smac, dmac) {
-                        Ok(stats) => {
-                            println!("FRER Stream Statistics:");
-                            println!("  SMAC: {}", format_mac(&stats.id.smac));
-                            println!("  DMAC: {}", format_mac(&stats.id.dmac));
-                            println!("  Received:       {}", stats.received_count);
-                            println!("  Eliminated:     {} (duplicates dropped)", stats.eliminated_count);
-                            println!("  Out-of-order:   {} (accepted)", stats.out_of_order_count);
-                            println!("  Out-of-window:  {} (dropped, too old)", stats.out_of_window_count);
-                            println!("  Recv Seq:       {}", stats.recv_seq);
-                            println!("  Next Seq:       {}", stats.next_seq);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to get stats: {}", e);
-                            exit(1);
-                        }
+                "stats" => match frer.get_stats(smac, dmac) {
+                    Ok(stats) => {
+                        println!("FRER Stream Statistics:");
+                        println!("  SMAC: {}", format_mac(&stats.id.smac));
+                        println!("  DMAC: {}", format_mac(&stats.id.dmac));
+                        println!("  Received:       {}", stats.received_count);
+                        println!(
+                            "  Eliminated:     {} (duplicates dropped)",
+                            stats.eliminated_count
+                        );
+                        println!("  Out-of-order:   {} (accepted)", stats.out_of_order_count);
+                        println!(
+                            "  Out-of-window:  {} (dropped, too old)",
+                            stats.out_of_window_count
+                        );
+                        println!("  Recv Seq:       {}", stats.recv_seq);
+                        println!("  Next Seq:       {}", stats.next_seq);
                     }
-                }
+                    Err(e) => {
+                        eprintln!("Failed to get stats: {}", e);
+                        exit(1);
+                    }
+                },
 
                 "delete" => {
                     let id = tsn_sdk::frer::FrerStreamId { smac, dmac };
@@ -218,6 +230,3 @@ fn main() {
         }
     }
 }
-
-
-

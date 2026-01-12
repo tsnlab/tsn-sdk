@@ -152,7 +152,11 @@ impl FrerController {
     }
 
     /// Get statistics for a stream
-    pub fn get_stats(&self, smac: [u8; ETH_ALEN], dmac: [u8; ETH_ALEN]) -> Result<FrerStreamStats, Error> {
+    pub fn get_stats(
+        &self,
+        smac: [u8; ETH_ALEN],
+        dmac: [u8; ETH_ALEN],
+    ) -> Result<FrerStreamStats, Error> {
         let mut stats = FrerStreamStats {
             id: FrerStreamId { smac, dmac },
             ..Default::default()
@@ -181,7 +185,10 @@ impl Drop for FrerController {
 pub fn parse_mac(s: &str) -> Result<[u8; ETH_ALEN], Error> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != ETH_ALEN {
-        return Err(Error::new(ErrorKind::InvalidInput, "Invalid MAC address format"));
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid MAC address format",
+        ));
     }
 
     let mut mac = [0u8; ETH_ALEN];
@@ -216,4 +223,3 @@ mod tests {
         assert_eq!(format_mac(&mac), "AA:BB:CC:DD:EE:FF");
     }
 }
-

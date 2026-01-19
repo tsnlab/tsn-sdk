@@ -315,6 +315,7 @@ struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
 	memcpy(stream->id.dmac, dmac, ETH_ALEN);
 	stream->seq_gen.next_seq = 0;
 	stream->seq_gen.active = true;
+	stream->seq_recv.active = true;
 
 	hash = frer_stream_hash(smac, dmac);
 	hash_add(frer->streams, &stream->hash_node, hash);
@@ -557,6 +558,7 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  *   FRER_DROP_OUT_OF_WINDOW - Frame is too old (outside history window)
  *   FRER_ERROR - Error processing frame
  */
+extern unsigned int enable_cb;
 int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id)
 {
 	struct ethhdr *eth;
@@ -572,7 +574,7 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 	int bit_pos;
 	bool valid_port = (port_id >= 0 && port_id < MAX_FRER_PORTS);
 
-	if (!frer->enabled) {
+	if (!enable_cb &&!frer->enabled) {
 		return FRER_PASS;
 	}
 

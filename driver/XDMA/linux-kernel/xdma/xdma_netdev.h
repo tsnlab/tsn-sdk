@@ -73,6 +73,7 @@ struct xdma_private {
         int tstamp_retry[TSN_TIMESTAMP_ID_MAX];
 
         struct delayed_work rx_poll_work;
+        unsigned long last_switch_jiffies;
 
         int tx_port;
         int rx_port;

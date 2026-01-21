@@ -1413,7 +1413,6 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
  * to trigger a transfer for data already in the FIFO (which won't generate
  * an interrupt on its own since the port was switched after data arrived).
  */
-static unsigned long last_switch_jiffies = 0;
 #define RX_PORT_SWITCH_INTERVAL_MS 2  /* Switch ports every 2ms for fast round-robin */
 
 void xdma_rx_poll_work(struct work_struct *work) {
@@ -1438,7 +1437,7 @@ void xdma_rx_poll_work(struct work_struct *work) {
 
 	/* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
 	{
-		unsigned long since_switch = jiffies_to_msecs(now_j - last_switch_jiffies);
+		unsigned long since_switch = jiffies_to_msecs(now_j - priv->last_switch_jiffies);
 		if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
 			target_port = (priv->rx_port == 0) ? 1 : 0;
 		} else {
@@ -1461,7 +1460,7 @@ void xdma_rx_poll_work(struct work_struct *work) {
 		iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
 			  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 		priv->rx_port = target_port;
-		last_switch_jiffies = now_j;
+		priv->last_switch_jiffies = now_j;
 
 		/* Full DMA restart: clear status and re-write descriptor address */
 		ioread32(&engine->regs->status_rc);

@@ -574,7 +574,7 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 	int bit_pos;
 	bool valid_port = (port_id >= 0 && port_id < MAX_FRER_PORTS);
 
-	if (!enable_cb &&!frer->enabled) {
+	if (!enable_cb && !frer->enabled) {
 		return FRER_PASS;
 	}
 

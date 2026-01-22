@@ -4850,6 +4850,8 @@ void xdma_device_close(struct pci_dev *pdev, void *dev_hndl)
 		       (unsigned long)xdev->pdev, (unsigned long)pdev);
 	}
 
+	tsn_cleanup_configs(pdev);
+
 	channel_interrupts_disable(xdev, ~0);
 	user_interrupts_disable(xdev, ~0);
 	read_interrupts(xdev);

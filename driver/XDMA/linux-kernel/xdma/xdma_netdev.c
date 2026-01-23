@@ -107,6 +107,9 @@ int xdma_netdev_close(struct net_device *ndev)
                 dev_kfree_skb_any(priv->tx_skb);
                 priv->tx_skb = NULL;
         }
+        pr_info("stop_count: %llu\n", priv->stop_count);
+        pr_info("wake_count: %llu\n", priv->wake_count);
+        pr_info("error_count: %llu\n", priv->error_count);
         pr_info("xdma_netdev_close\n");
         netif_carrier_off(ndev);
         pr_info("netif_carrier_off\n");
@@ -132,6 +135,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         /* Check desc count */
         q = skb_get_queue_mapping(skb);
         netif_stop_subqueue(ndev, q);
+        priv->stop_count++;
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
         skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
@@ -142,6 +146,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         if (skb_padto(skb, skb->len)) {
                 pr_err("skb_padto failed\n");
                 netif_wake_subqueue(ndev, q);
+                priv->error_count++;
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -152,6 +157,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 pr_err("Jumbo frames not supported\n");
 #endif
                 netif_wake_subqueue(ndev, q);
+                priv->error_count++;
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -162,6 +168,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 pr_err("pskb_expand_head failed\n");
 #endif
                 netif_wake_subqueue(ndev, q);
+                priv->error_count++;
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -186,6 +193,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		pr_warn("tsn_fill_metadata failed\n");
 #endif
 		netif_wake_subqueue(ndev, q);
+                priv->error_count++;
 		return NETDEV_TX_BUSY;
 	}
 
@@ -210,6 +218,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
 				netif_wake_subqueue(ndev, q);
+                                priv->error_count++;
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;
 			}
@@ -229,6 +238,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
                 netif_wake_subqueue(ndev, q);
+                priv->error_count++;
                 return NETDEV_TX_BUSY;
         }
 

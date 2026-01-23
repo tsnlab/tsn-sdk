@@ -84,6 +84,10 @@ struct xdma_private {
         uint64_t last_to_overflow_popped;
         uint64_t last_to_overflow_timeout;
 
+        uint64_t stop_count;
+        uint64_t wake_count;
+        uint64_t error_count;
+
         unsigned long state;
 };
 

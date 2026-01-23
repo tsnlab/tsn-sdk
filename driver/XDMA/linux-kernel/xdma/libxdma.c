@@ -1635,6 +1635,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 		netif_wake_subqueue(ndev, q);
+		priv->wake_count++;
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 	}
 	xdev->irq_count++;

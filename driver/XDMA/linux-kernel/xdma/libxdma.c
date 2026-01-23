@@ -1618,6 +1618,10 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		engine = &xdev->engine_h2c[0];
 
 		engine_status_read(engine, 1, 0);
+		if (priv->tx_skb == NULL) {
+			pr_err("Invalid h2c interrupt\n");
+			return IRQ_NONE;
+		}
 
 		q = skb_get_queue_mapping(priv->tx_skb);
 

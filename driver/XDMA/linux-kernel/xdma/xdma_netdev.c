@@ -103,6 +103,10 @@ int xdma_netdev_close(struct net_device *ndev)
         for (i = 0; i < TX_QUEUE_COUNT; i++) {
                 netif_stop_subqueue(ndev, i);
         }
+        if (priv->tx_skb) {
+                dev_kfree_skb_any(priv->tx_skb);
+                priv->tx_skb = NULL;
+        }
         pr_info("xdma_netdev_close\n");
         netif_carrier_off(ndev);
         pr_info("netif_carrier_off\n");

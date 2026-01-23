@@ -442,8 +442,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
-	INIT_DELAYED_WORK(&priv->rx_poll_work, xdma_rx_poll_work);
-	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+	// INIT_DELAYED_WORK(&priv->rx_poll_work, xdma_rx_poll_work);
+	// schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 
 	priv->tx_port = 0;
 	priv->rx_port = 0;
@@ -501,7 +501,7 @@ static void remove_one(struct pci_dev *pdev)
 	priv = netdev_priv(ndev);
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
-	cancel_delayed_work(&priv->rx_poll_work);
+	// cancel_delayed_work(&priv->rx_poll_work);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
 	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);

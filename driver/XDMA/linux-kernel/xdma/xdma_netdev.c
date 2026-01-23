@@ -659,7 +659,7 @@ err:
     return -ENOMEM;
 }
 
-#define DEF_TX_QUEUE_LEN (32)
+#define DEF_TX_QUEUE_LEN (24)
 
 inline void xdma_set_txqueue_length(struct net_device* ndev, u32 length) {
     ndev->tx_queue_len = length;

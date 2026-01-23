@@ -18,7 +18,7 @@
  *
  * Recommended ring size: 4–8.
  */
-#define XDMA_TX_RING_SIZE 256
+#define XDMA_TX_RING_SIZE 1024
 #define XDMA_TX_BUF_SIZE 4096 /* Enough for metadata + max Ethernet payload */
 
 /*

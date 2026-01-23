@@ -15,6 +15,8 @@
 
 #define WORKAROUND_PAD 5
 
+// #define TX_SAFE_GUARD
+
 /* Static function declarations */
 static int xdma_netdev_rx_poll(struct xdma_private* priv, int budget);
 static void xdma_restart_rx_engine(struct xdma_private* priv);
@@ -483,6 +485,41 @@ static int xdma_netdev_rx_poll(struct xdma_private* priv, int budget) {
     return work_done;
 }
 
+void waste_time(void) {
+    u64 tt = ktime_get_ns();
+    u64 nop_count = 0;
+    while ((ktime_get_ns() - tt) < 10000) {
+        nop_count++;
+    }
+    pr_info_ratelimited("[NAPI_POLL] waste_time: %u\n", nop_count);
+}
+
+#ifdef TX_TEST_WITHOUT_ISR
+/*
+ * This is to test TX ONLY without ISR
+ * It reads and puts the napi schedule instead of isr_tx
+ */
+enum hrtimer_restart xdma_hrtimer_callback(struct hrtimer* timer) {
+    struct xdma_private* priv = container_of(timer, struct xdma_private, tx_hrtimer);
+
+    if (!READ_ONCE(priv->tx_desc_has_pending))
+        return HRTIMER_NORESTART;
+
+    pr_info_ratelimited("[HRTIMER_CB] xdma_hrtimer_callback\n");
+
+    priv->last_tx_status = XDMA_STAT_DESC_COMPLETED;
+    atomic_inc(&priv->tx_done_cnt);
+
+    if (napi_schedule_prep(&priv->napi)) {
+        __napi_schedule(&priv->napi);
+        pr_info_ratelimited("[HRTIMER_CB] __napi_schedule\n");
+    }
+
+    return HRTIMER_NORESTART;
+}
+
+#endif
+
 int xdma_napi_poll(struct napi_struct* napi, int budget) {
     struct xdma_private* priv = container_of(napi, struct xdma_private, napi);
     int work_done = 0;
@@ -522,6 +559,8 @@ int xdma_napi_poll(struct napi_struct* napi, int budget) {
         // pr_info("xdma_napi_poll work_done: %d, budget: %d -> NAPI complete and IRQ re-enable\n", work_done, budget);
 
         if (napi_complete_done(napi, work_done)) {
+            // waste_time();
+            pr_info_ratelimited("[NETDEV][NAPI_POLL] napi_poll complete_done\n");
             channel_interrupts_enable(xdev, irq_mask);
         }
     }
@@ -620,6 +659,12 @@ err:
     return -ENOMEM;
 }
 
+#define DEF_TX_QUEUE_LEN (32)
+
+inline void xdma_set_txqueue_length(struct net_device* ndev, u32 length) {
+    ndev->tx_queue_len = length;
+}
+
 int xdma_netdev_open(struct net_device* ndev) {
     struct xdma_private* priv = netdev_priv(ndev);
     struct device* dev = &priv->pdev->dev;
@@ -632,6 +677,9 @@ int xdma_netdev_open(struct net_device* ndev) {
         priv->ndev = ndev;
         pr_info("xdma_netdev_open(): linked xdev->ndev to %s\n", ndev->name);
     }
+
+    /* set default tx queue length */
+    xdma_set_txqueue_length(ndev, DEF_TX_QUEUE_LEN);
 
     /* Device ready + clear OFFLINE flag */
     xdma_device_flag_clear(priv->xdev, XDEV_FLAG_OFFLINE);
@@ -650,6 +698,7 @@ int xdma_netdev_open(struct net_device* ndev) {
     priv->rx_ring.pending = 0;
     priv->rx_ring.prep = 0;
     priv->rx_ring.has_pending = false;
+    priv->tx_last_time = ktime_get_ns();
 
     atomic_set(&priv->tx_done_cnt, 0);
 
@@ -712,8 +761,15 @@ int xdma_netdev_open(struct net_device* ndev) {
     hi = cpu_to_le32(PCI_DMA_H(rx_bus_addr));
     iowrite32(hi, &priv->rx_engine->sgdma_regs->first_desc_hi);
 
+#ifdef TX_TEST_WITHOUT_ISR
+    hrtimer_init(&priv->tx_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    priv->tx_hrtimer.function = xdma_hrtimer_callback;
+#endif
+
     /* START RX engine */
+#ifndef TX_ONLY_TEST
     iowrite32(DMA_ENGINE_START, &priv->rx_engine->regs->control);
+#endif
 
     spin_unlock_irqrestore(&priv->rx_lock, flags);
 
@@ -738,6 +794,10 @@ int xdma_netdev_close(struct net_device* ndev) {
 
     /* 1) Stop flag set (prevent RX path from progressing) */
     WRITE_ONCE(priv->b_stop_rx_polling, true);
+
+#ifdef TX_TEST_WITHOUT_ISR
+    hrtimer_cancel(&priv->tx_hrtimer);
+#endif
 
     /*
      * 2) Mask interrupts FIRST to prevent new ISR scheduling NAPI
@@ -874,6 +934,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
     // frame_length = skb->len;
     // skb->len = workaround_packet_size(skb->len);
 
+#ifdef TX_SAFE_GUARD
     /* Fix Alignment: if skb data is not aligned by 8-byte, create a copy */
     if (unlikely(((unsigned long)skb->data & 0x7) != 0)) {
         struct sk_buff* nskb = skb_copy(skb, GFP_ATOMIC);
@@ -888,6 +949,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
         consume_skb(skb); // free original skb
         skb = nskb;       // use new aligned skb
     }
+#endif
 
     u32 orig_len = skb->len;
     u32 target_len = max_t(u32, ETH_ZLEN, orig_len);
@@ -998,7 +1060,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
 
     /* Copy into DMA-coherent slot buffer */
 /* ---- TX preflight checks before copying into DMA slot ---- */
-#if XDMA_CANARY_TEST
+#ifdef XDMA_CANARY_TEST
     /* 1) Detect prior corruption (evidence of previous DMA overrun) */
     {
         int g = xdma_tx_guard_check(slot->raw_vaddr, XDMA_TX_BUF_SIZE);
@@ -1032,13 +1094,16 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
         return NETDEV_TX_OK;
     }
 
+#ifdef TX_SAFE_GUARD
     if (skb_linearize(skb)) {
         dev_kfree_skb_any(skb);
         return NETDEV_TX_OK;
     }
+#endif
 
     dma_sync_single_for_cpu(dma_dev, slot->dma, XDMA_TX_BUF_SIZE, DMA_TO_DEVICE);
 
+#ifdef TX_SAFE_GUARD
     {
         if (unlikely(((unsigned long)skb->data & 0x7) != 0)) {
             struct sk_buff* nskb = skb_copy(skb, GFP_ATOMIC);
@@ -1054,6 +1119,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
             skb = nskb;
         }
     }
+#endif
+
     memcpy(slot->vaddr, skb->data, skb->len);
     dma_sync_single_for_device(dma_dev, slot->dma, XDMA_TX_BUF_SIZE, DMA_TO_DEVICE);
 
@@ -1122,7 +1189,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
     //         ioread32(&priv->tx_engine->sgdma_regs->first_desc_hi));
 
     /* Start TX engine */
+#ifndef TX_TEST_WITHOUT_ISR
     iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
+#endif
 
     /* Flush START too */
     (void)ioread32(&priv->tx_engine->regs->control);
@@ -1137,7 +1206,14 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff* skb, struct net_device* ndev)
     // pr_info("[TX-XMIT] xdma_netdev_start_xmit exit\n");
     spin_unlock_bh(&priv->tx_lock);
 
+    pr_info_ratelimited("[XMIT] interval tx_last_time = %u ns\n", ktime_get_ns() - priv->tx_last_time);
+    priv->tx_last_time = ktime_get_ns();
     netif_trans_update(ndev);
+
+#ifdef TX_TEST_WITHOUT_ISR
+    ktime_t kt = ktime_set(0, 10000); // 24 microseconds
+    hrtimer_start(&priv->tx_hrtimer, kt, HRTIMER_MODE_REL);
+#endif
     return NETDEV_TX_OK;
 }
 

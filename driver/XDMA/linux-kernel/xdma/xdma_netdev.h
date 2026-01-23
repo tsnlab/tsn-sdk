@@ -30,6 +30,9 @@
 
 #define TX_TSTAMP_MAX_RETRY 5
 
+// #define TX_TEST_WITHOUT_ISR 1
+// #define TX_ONLY_TEST 1
+
 enum xdma_state_t {
         XDMA_TX1_IN_PROGRESS = 1,
         XDMA_TX2_IN_PROGRESS = 2,
@@ -129,6 +132,11 @@ struct xdma_private {
     struct xdma_tx_ring tx_ring;
 
     atomic_t tx_done_cnt; /* ISR increments, NAPI poll consumes */
+    u64 tx_last_time;
+
+#ifdef TX_TEST_WITHOUT_ISR
+    struct hrtimer tx_hrtimer;
+#endif
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)

@@ -2,9 +2,9 @@
 
 #pragma once
 
-#ifndef XDMA_CANARY_TEST
-#define XDMA_CANARY_TEST 0
-#endif
+// #ifndef XDMA_CANARY_TEST
+// #define XDMA_CANARY_TEST 
+// #endif
 
 #include <linux/dma-mapping.h>
 #include <linux/types.h>

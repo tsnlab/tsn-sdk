@@ -1455,6 +1455,8 @@ void xdma_rx_poll_work(struct work_struct *work) {
 
 		/* Stop DMA first */
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+		channel_interrupts_disable(xdev, engine->irq_bitmask);
+		channel_interrupts_disable(xdev, xdev->mask_irq_h2c);
 
 		/* Switch the port */
 		iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
@@ -1469,6 +1471,7 @@ void xdma_rx_poll_work(struct work_struct *work) {
 		iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
 		iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
 		channel_interrupts_enable(xdev, engine->irq_bitmask);
+		channel_interrupts_enable(xdev, xdev->mask_irq_h2c);
 		iowrite32(DMA_ENGINE_START, &engine->regs->control);
 
 		spin_unlock_irqrestore(&priv->rx_lock, flags);

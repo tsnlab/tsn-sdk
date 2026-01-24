@@ -406,6 +406,8 @@ int frer_insert_rtag_tx(struct sk_buff *skb, struct frer_stream *stream,
 	struct frer_rtag rtag;
 	__be16 orig_proto;
 	int payload_len;
+	int insert_offset;
+	bool is_vlan;
 
 	if (!stream->seq_gen.active)
 		return 0;
@@ -415,21 +417,49 @@ int frer_insert_rtag_tx(struct sk_buff *skb, struct frer_stream *stream,
 		return -ENOMEM;
 
 	orig_proto = eth->h_proto;
-	payload_len = frame_length - ETH_HLEN;
+	is_vlan = (ntohs(orig_proto) == ETH_P_8021Q);
 
-	/* Shift payload to make room for R-TAG after ETH header */
-	memmove(frame + ETH_HLEN + FRER_RTAG_SIZE, frame + ETH_HLEN, payload_len);
+	/* Determine insertion point: after VLAN header if present, else after ETH header */
+	if (is_vlan) {
+		/* VLAN tagged: insert after VLAN header */
+		insert_offset = ETH_HLEN + VLAN_HLEN;
+		payload_len = frame_length - ETH_HLEN - VLAN_HLEN;
+	} else {
+		/* No VLAN: insert after Ethernet header */
+		insert_offset = ETH_HLEN;
+		payload_len = frame_length - ETH_HLEN;
+	}
+
+	/* Shift payload to make room for R-TAG */
+	memmove(frame + insert_offset + FRER_RTAG_SIZE, frame + insert_offset, payload_len);
 
 	/* Build R-TAG */
 	rtag.ethertype = htons(ETH_P_RTAG);
 	rtag.reserved = 0;
 	rtag.seq_num = htons(stream->seq_gen.next_seq++);
 
-	/* Insert R-TAG after ETH header, but the ethertype overlaps with R-TAG */
-	memcpy(frame + offsetof(struct ethhdr, h_proto), &rtag, FRER_RTAG_SIZE);
+	if (is_vlan) {
+		/* For VLAN tagged frames, R-TAG ethertype replaces inner protocol */
+		struct vlan_hdr *vhdr = (struct vlan_hdr *)(frame + ETH_HLEN);
+		__be16 inner_proto = vhdr->h_vlan_encapsulated_proto;
 
-	/* Update EtherType to R-TAG, put original after R-TAG */
-	*(__be16 *)(frame + offsetof(struct ethhdr, h_proto) + FRER_RTAG_SIZE) = orig_proto;
+		/* Insert R-TAG after VLAN header */
+		memcpy(frame + insert_offset, &rtag, FRER_RTAG_SIZE);
+
+		/* The original inner protocol follows R-TAG */
+		*(__be16 *)(frame + insert_offset + FRER_RTAG_SIZE) = inner_proto;
+		vhdr->h_vlan_encapsulated_proto = htons(ETH_P_RTAG);
+	} else {
+		/* For non-VLAN frames, insert R-TAG replacing h_proto */
+		memcpy(frame + offsetof(struct ethhdr, h_proto), &rtag, FRER_RTAG_SIZE);
+
+		/* Update EtherType to R-TAG, put original after R-TAG */
+		*(__be16 *)(frame + offsetof(struct ethhdr, h_proto) + FRER_RTAG_SIZE) = orig_proto;
+		eth->h_proto = htons(ETH_P_RTAG);
+	}
+
+	/* Increment sequence number */
+	stream->seq_gen.next_seq++;
 
 	/* Extend skb length */
 	skb_put(skb, FRER_RTAG_SIZE);

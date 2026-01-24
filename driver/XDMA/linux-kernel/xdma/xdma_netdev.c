@@ -191,20 +191,20 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
 	extern unsigned int enable_cb;
 	/* FRER (802.1CB): Insert R-TAG with auto stream registration */
-	if (enable_cb || (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled)) {
+	if (xdev->tsn_config.frer && (enable_cb || xdev->tsn_config.frer->enabled)) {
 		struct ethhdr *eth = (struct ethhdr *)(tx_buffer->data);
 		struct frer_stream *stream;
 		unsigned long frer_flags;
-		
+
 		spin_lock_irqsave(&xdev->tsn_config.frer->lock, frer_flags);
-		stream = frer_stream_lookup(xdev->tsn_config.frer, 
+		stream = frer_stream_lookup(xdev->tsn_config.frer,
 					    eth->h_source, eth->h_dest);
-		
+
 		/* Auto-register stream if not found */
 		if (!stream)
 			stream = frer_auto_register_stream(xdev->tsn_config.frer,
 							   eth->h_source, eth->h_dest);
-		
+
 		if (stream && stream->seq_gen.active) {
 			/* Use TX-aware R-TAG insertion */
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
@@ -448,7 +448,7 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 goto retry;
         }
         /*
-         * Read TX timestamp several times because 
+         * Read TX timestamp several times because
          * the work thread might try to read TX timestamp
          * before the register gets updated
          */

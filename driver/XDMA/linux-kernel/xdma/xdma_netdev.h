@@ -113,8 +113,8 @@ struct tx_buffer {
 } __attribute__((packed, scalar_storage_order("big-endian")));
 
 struct rx_metadata {
-    uint64_t timestamp;
     uint16_t frame_length;
+    uint64_t timestamp;
 } __attribute__((packed, scalar_storage_order("big-endian")));
 
 struct rx_buffer {

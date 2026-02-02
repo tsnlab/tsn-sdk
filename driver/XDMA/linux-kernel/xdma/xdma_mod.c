@@ -22,6 +22,7 @@
 #include <linux/errno.h>
 #include <linux/aer.h>
 #include <linux/ethtool.h>
+#include <linux/rtnetlink.h>
 #include <uapi/linux/net_tstamp.h>
 /* include early, to verify it depends only on the headers above */
 #include "libxdma_api.h"
@@ -453,12 +454,22 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	ptp_data->xdev = xpdev->xdev;
 	xpdev->ptp = ptp_data;
 
+	/* Start with carrier off so linkwatch sets operstate (not UNKNOWN).
+	 * ndo_open will call netif_carrier_on(), triggering linkwatch -> IF_OPER_UP.
+	 */
+	netif_carrier_off(ndev);
+
 	rv = register_netdev(ndev);
 	if (rv < 0) {
 		free_netdev(ndev);
 		pr_err("register_netdev failed\n");
 		goto err_out;
 	}
+	rtnl_lock();
+	rv = dev_change_flags(ndev, ndev->flags | IFF_UP, NULL);
+	rtnl_unlock();
+	if (rv < 0)
+		pr_warn("failed to bring interface up: %d\n", rv);
 	channel_interrupts_enable(xdev, ~0);
 	//netif_stop_queue(ndev);
 	return 0;

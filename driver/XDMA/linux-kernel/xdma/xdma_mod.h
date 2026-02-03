@@ -62,9 +62,6 @@
 /* FIXME: BUFFER_SIZE should be changed */
 #define XDMA_BUFFER_SIZE (1560)
 
-/* Number of network ports per XDMA device */
-#define XDMA_NUM_PORTS 2
-
 extern unsigned int desc_blen_max;
 extern unsigned int h2c_timeout;
 extern unsigned int c2h_timeout;
@@ -88,7 +85,7 @@ struct xdma_pci_dev {
 	unsigned long magic;		/* structure ID for sanity checks */
 	struct pci_dev *pdev;	/* pci device struct from probe() */
 	struct xdma_dev *xdev;
-	struct net_device *ndev[XDMA_NUM_PORTS];  /* network devices for each port */
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS];  /* network devices for each port */
 	struct ptp_device_data *ptp;
 	int num_ports;		/* number of active ports */
 	int major;		/* major number */

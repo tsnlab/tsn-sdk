@@ -594,7 +594,7 @@ struct xdma_dev {
 
 	unsigned long magic;		/* structure ID for sanity checks */
 	struct pci_dev *pdev;	/* pci device struct from probe() */
-	struct net_device *ndev; /* net device struct from probe() */
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS]; /* net device struct from probe() */
 	struct tsn_config tsn_config;
 	int idx;		/* dev index */
 

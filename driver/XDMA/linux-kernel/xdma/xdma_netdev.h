@@ -35,9 +35,8 @@ enum xdma_state_t {
         XDMA_TX4_IN_PROGRESS = 4,
 };
 
-struct xdma_private {
+struct xdma_private_common {
         struct pci_dev *pdev;
-        struct net_device *ndev;
         struct xdma_dev *xdev;
 
         struct xdma_engine *tx_engine;
@@ -62,8 +61,6 @@ struct xdma_private {
         int irq;
         int rx_count;
 
-        int port_id;    /* Port ID for FRER (0 or 1) */
-
         struct work_struct tx_work[TSN_TIMESTAMP_ID_MAX];
         struct sk_buff *tx_work_skb[TSN_TIMESTAMP_ID_MAX];
         sysclock_t tx_work_start_after[TSN_TIMESTAMP_ID_MAX];
@@ -75,7 +72,6 @@ struct xdma_private {
         struct delayed_work rx_poll_work;
         unsigned long last_switch_jiffies;
 
-        int tx_port;
         int rx_port;
 
         uint64_t total_tx_count;
@@ -84,7 +80,14 @@ struct xdma_private {
         uint64_t last_to_overflow_popped;
         uint64_t last_to_overflow_timeout;
 
+        int open_cnt;
         unsigned long state;
+};
+
+struct xdma_private {
+        struct net_device *ndev;
+        int port_id;    /* Port ID for FRER (0 or 1) */
+        struct xdma_private_common *common;
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)

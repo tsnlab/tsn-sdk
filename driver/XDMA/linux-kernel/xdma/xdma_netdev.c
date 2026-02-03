@@ -64,6 +64,7 @@ void rx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
 int xdma_netdev_open(struct net_device *ndev)
 {
         struct xdma_private *priv = netdev_priv(ndev);
+        struct xdma_private_common *common = priv->common;
         u32 lo, hi;
         unsigned long flag;
         int i;
@@ -74,22 +75,26 @@ int xdma_netdev_open(struct net_device *ndev)
                 netif_start_subqueue(ndev, i);
         }
 
+        if (common->open_cnt++ > 0) {
+                return 0;
+        }
+
         /* Set the RX descriptor */
-        priv->rx_desc->src_addr_lo = cpu_to_le32(PCI_DMA_L(priv->res_dma_addr));
-        priv->rx_desc->src_addr_hi = cpu_to_le32(PCI_DMA_H(priv->res_dma_addr));
-        rx_desc_set(priv->rx_desc, priv->rx_dma_addr, XDMA_BUFFER_SIZE);
-        spin_lock_irqsave(&priv->rx_lock, flag);
-        ioread32(&priv->rx_engine->regs->status_rc);
+        common->rx_desc->src_addr_lo = cpu_to_le32(PCI_DMA_L(common->res_dma_addr));
+        common->rx_desc->src_addr_hi = cpu_to_le32(PCI_DMA_H(common->res_dma_addr));
+        rx_desc_set(common->rx_desc, common->rx_dma_addr, XDMA_BUFFER_SIZE);
+        spin_lock_irqsave(&common->rx_lock, flag);
+        ioread32(&common->rx_engine->regs->status_rc);
 
         /* RX start */
-        lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
-        iowrite32(lo, &priv->rx_engine->sgdma_regs->first_desc_lo);
+        lo = cpu_to_le32(PCI_DMA_L(common->rx_bus_addr));
+        iowrite32(lo, &common->rx_engine->sgdma_regs->first_desc_lo);
 
-        hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
-        iowrite32(hi, &priv->rx_engine->sgdma_regs->first_desc_hi);
+        hi = cpu_to_le32(PCI_DMA_H(common->rx_bus_addr));
+        iowrite32(hi, &common->rx_engine->sgdma_regs->first_desc_hi);
 
-        iowrite32(DMA_ENGINE_START, &priv->rx_engine->regs->control);
-        spin_unlock_irqrestore(&priv->rx_lock, flag);
+        iowrite32(DMA_ENGINE_START, &common->rx_engine->regs->control);
+        spin_unlock_irqrestore(&common->rx_lock, flag);
 
         return 0;
 }
@@ -98,14 +103,15 @@ int xdma_netdev_close(struct net_device *ndev)
 {
         int i;
         struct xdma_private *priv = netdev_priv(ndev);
-        iowrite32(DMA_ENGINE_STOP, &priv->rx_engine->regs->control);
+        struct xdma_private_common *common = priv->common;
+        iowrite32(DMA_ENGINE_STOP, &common->rx_engine->regs->control);
         netif_stop_queue(ndev);
         for (i = 0; i < TX_QUEUE_COUNT; i++) {
                 netif_stop_subqueue(ndev, i);
         }
-        if (priv->tx_skb) {
-                dev_kfree_skb_any(priv->tx_skb);
-                priv->tx_skb = NULL;
+        if (--common->open_cnt == 0 && common->tx_skb) {
+                dev_kfree_skb_any(common->tx_skb);
+                common->tx_skb = NULL;
         }
         pr_info("xdma_netdev_close\n");
         netif_carrier_off(ndev);
@@ -117,7 +123,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 struct net_device *ndev)
 {
         struct xdma_private *priv = netdev_priv(ndev);
-        struct xdma_dev *xdev = priv->xdev;
+        struct xdma_private_common *common = priv->common;
+        struct xdma_dev *xdev = common->xdev;
         u32 w;
         sysclock_t sys_count, sys_count_upper, sys_count_lower;
         timestamp_t now;
@@ -175,7 +182,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         tx_metadata->frame_length = frame_length;
 
         sys_count = alinx_get_sys_clock_by_xdev(xdev);
-        now = alinx_sysclock_to_timestamp(priv->pdev, sys_count);
+        now = alinx_sysclock_to_timestamp(common->pdev, sys_count);
         sys_count_lower = sys_count & LOWER_29_BITS;
         sys_count_upper = sys_count & ~LOWER_29_BITS;
 
@@ -233,10 +240,10 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         }
 
         if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
-                if (priv->tstamp_config.tx_type == HWTSTAMP_TX_ON &&
-                        !test_and_set_bit_lock(tx_metadata->timestamp_id, &priv->state)) {
+                if (common->tstamp_config.tx_type == HWTSTAMP_TX_ON &&
+                        !test_and_set_bit_lock(tx_metadata->timestamp_id, &common->state)) {
                         skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
-                        priv->tx_work_skb[tx_metadata->timestamp_id] = skb_get(skb);
+                        common->tx_work_skb[tx_metadata->timestamp_id] = skb_get(skb);
                         /*
                          * Even if the driver's intention was sys_count == from,
                          * there might be a slight error caused during conversion (sysclock <-> timestamp)
@@ -244,19 +251,19 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                          * Adding/Subtracting directly from values can cause another overflow,
                          * so just calculate the difference.
                          */
-                        priv->tx_work_start_after[tx_metadata->timestamp_id] = sys_count_upper | tx_metadata->from.tick;
+                        common->tx_work_start_after[tx_metadata->timestamp_id] = sys_count_upper | tx_metadata->from.tick;
                         if (sys_count_lower > tx_metadata->from.tick && sys_count_lower - tx_metadata->from.tick > TX_WORK_OVERFLOW_MARGIN) {
                                 // Overflow
-                                priv->tx_work_start_after[tx_metadata->timestamp_id] += (1 << 29);
+                                common->tx_work_start_after[tx_metadata->timestamp_id] += (1 << 29);
                         }
                         to_value = (tx_metadata->fail_policy == TSN_FAIL_POLICY_RETRY ? tx_metadata->delay_to.tick : tx_metadata->to.tick);
-                        priv->tx_work_wait_until[tx_metadata->timestamp_id] = sys_count_upper | to_value;
+                        common->tx_work_wait_until[tx_metadata->timestamp_id] = sys_count_upper | to_value;
                         if (sys_count_lower > to_value && sys_count_lower - to_value > TX_WORK_OVERFLOW_MARGIN) {
                                 // Overflow
-                                priv->tx_work_wait_until[tx_metadata->timestamp_id] += (1 << 29);
+                                common->tx_work_wait_until[tx_metadata->timestamp_id] += (1 << 29);
                         }
-                        schedule_work(&priv->tx_work[tx_metadata->timestamp_id]);
-                } else if (priv->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
+                        schedule_work(&common->tx_work[tx_metadata->timestamp_id]);
+                } else if (common->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
                         pr_warn("Timestamp skipped: timestamp config is off\n");
                 } else {
                         pr_warn("Timestamp skipped: driver is waiting for previous packet's timestamp\n");
@@ -265,18 +272,18 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         }
 
         /* netif_wake_queue() will be called in xdma_isr() */
-        priv->tx_dma_addr = dma_addr;
-        priv->tx_skb = skb;
-        tx_desc_set(priv->tx_desc, dma_addr, skb->len);
+        common->tx_dma_addr = dma_addr;
+        common->tx_skb = skb;
+        tx_desc_set(common->tx_desc, dma_addr, skb->len);
 
-        w = cpu_to_le32(PCI_DMA_L(priv->tx_bus_addr));
+        w = cpu_to_le32(PCI_DMA_L(common->tx_bus_addr));
         iowrite32(w, xdev->bar[1] + DESC_REG_LO);
 
-        w = cpu_to_le32(PCI_DMA_H(priv->tx_bus_addr));
+        w = cpu_to_le32(PCI_DMA_H(common->tx_bus_addr));
         iowrite32(w, xdev->bar[1] + DESC_REG_HI);
         iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
 
-        iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
+        iowrite32(DMA_ENGINE_START, &common->tx_engine->regs->control);
         return NETDEV_TX_OK;
 }
 
@@ -294,14 +301,16 @@ static int xdma_setup_tc_block_cb(enum tc_setup_type type, void *type_data, void
 
 int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void *type_data) {
         struct xdma_private *priv = netdev_priv(ndev);
+        struct xdma_private_common *common = priv->common;
+        // TODO: TSN config per port
 
         switch (type) {
         case TC_SETUP_QDISC_MQPRIO:
-                return tsn_set_mqprio(priv->pdev, (struct tc_mqprio_qopt_offload*)type_data);
+                return tsn_set_mqprio(common->pdev, (struct tc_mqprio_qopt_offload*)type_data);
         case TC_SETUP_QDISC_CBS:
-                return tsn_set_qav(priv->pdev, (struct tc_cbs_qopt_offload*)type_data);
+                return tsn_set_qav(common->pdev, (struct tc_cbs_qopt_offload*)type_data);
         case TC_SETUP_QDISC_TAPRIO:
-                return tsn_set_qbv(priv->pdev, (struct tc_taprio_qopt_offload*)type_data);
+                return tsn_set_qbv(common->pdev, (struct tc_taprio_qopt_offload*)type_data);
         case TC_SETUP_BLOCK:
                 return flow_block_cb_setup_simple(type_data, &xdma_block_cb_list, xdma_setup_tc_block_cb, priv, priv, true);
         default:
@@ -313,21 +322,24 @@ int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void 
 
 static int xdma_get_ts_config(struct net_device *ndev, struct ifreq *ifr) {
         struct xdma_private *priv = netdev_priv(ndev);
-        struct hwtstamp_config *config = &priv->tstamp_config;
+        struct xdma_private_common *common = priv->common;
+        struct hwtstamp_config *config = &common->tstamp_config;
 
         return copy_to_user(ifr->ifr_data, config, sizeof(*config)) ? -EFAULT : 0;
 }
 
 static int xdma_set_ts_config(struct net_device *ndev, struct ifreq *ifr) {
         struct xdma_private *priv = netdev_priv(ndev);
-        struct hwtstamp_config *config = &priv->tstamp_config;
+        struct xdma_private_common *common = priv->common;
+        struct hwtstamp_config *config = &common->tstamp_config;
 
         return copy_from_user(config, ifr->ifr_data, sizeof(*config)) ? -EFAULT : 0;
 }
 
 static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_dev *xdev = priv->xdev;
+	struct xdma_private_common *common = priv->common;
+	struct xdma_dev *xdev = common->xdev;
 	struct frer_stream_config config;
 
 	if (!xdev->tsn_config.frer) {
@@ -343,7 +355,8 @@ static int frer_ioctl_add_stream(struct net_device *ndev, struct ifreq *ifr, voi
 
 static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_dev *xdev = priv->xdev;
+	struct xdma_private_common *common = priv->common;
+	struct xdma_dev *xdev = common->xdev;
 	struct frer_stream_id id;
 
 	if (!xdev->tsn_config.frer) {
@@ -359,7 +372,8 @@ static int frer_ioctl_del_stream(struct net_device *ndev, struct ifreq *ifr, voi
 
 static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_dev *xdev = priv->xdev;
+	struct xdma_private_common *common = priv->common;
+	struct xdma_dev *xdev = common->xdev;
 	struct frer_stream_stats stats;
 	int ret;
 
@@ -385,7 +399,8 @@ static int frer_ioctl_get_stats(struct net_device *ndev, struct ifreq *ifr, void
 
 static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr, void *data) {
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_dev *xdev = priv->xdev;
+	struct xdma_private_common *common = priv->common;
+	struct xdma_dev *xdev = common->xdev;
 	int enable;
 
 	if (!xdev->tsn_config.frer) {
@@ -431,20 +446,20 @@ int xdma_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr, void 
 static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         sysclock_t tx_tstamp;
         struct skb_shared_hwtstamps shhwtstamps;
-        struct xdma_private* priv = container_of(work - tstamp_id, struct xdma_private, tx_work[0]);
-        struct sk_buff* skb = priv->tx_work_skb[tstamp_id];
-        sysclock_t now = alinx_get_sys_clock_by_xdev(priv->xdev);
+        struct xdma_private_common* common = container_of(work - tstamp_id, struct xdma_private_common, tx_work[0]);
+        struct sk_buff* skb = common->tx_work_skb[tstamp_id];
+        sysclock_t now = alinx_get_sys_clock_by_xdev(common->xdev);
 
         if (tstamp_id >= TSN_TIMESTAMP_ID_MAX) {
                 pr_err("Invalid timestamp ID\n");
                 return;
         }
 
-        if (!priv->tx_work_skb[tstamp_id]) {
+        if (!common->tx_work_skb[tstamp_id]) {
                 goto return_error;
         }
 
-        if (now < priv->tx_work_start_after[tstamp_id]) {
+        if (now < common->tx_work_start_after[tstamp_id]) {
                 goto retry;
         }
         /*
@@ -452,9 +467,9 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
          * the work thread might try to read TX timestamp
          * before the register gets updated
          */
-        tx_tstamp = alinx_read_tx_timestamp_by_xdev(priv->xdev, tstamp_id);
-        if (tx_tstamp == priv->last_tx_tstamp[tstamp_id]) {
-                if (alinx_get_sys_clock_by_xdev(priv->xdev) < priv->tx_work_wait_until[tstamp_id]) {
+        tx_tstamp = alinx_read_tx_timestamp_by_xdev(common->xdev, tstamp_id);
+        if (tx_tstamp == common->last_tx_tstamp[tstamp_id]) {
+                if (alinx_get_sys_clock_by_xdev(common->xdev) < common->tx_work_wait_until[tstamp_id]) {
                         /* The packet might have not been sent yet */
                         goto retry;
                 }
@@ -463,7 +478,7 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                  * Waiting for it to be updated forever is not desirable,
                  * so limit the number of retries
                  */
-                if (++(priv->tstamp_retry[tstamp_id]) >= TX_TSTAMP_MAX_RETRY) {
+                if (++(common->tstamp_retry[tstamp_id]) >= TX_TSTAMP_MAX_RETRY) {
                         /* TODO: track the number of skipped packets for ethtool stats */
                         pr_warn("Failed to get timestamp: timestamp is not getting updated, " \
                                 "the packet might have been dropped\n");
@@ -472,23 +487,23 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 goto retry;
         }
 
-        priv->tstamp_retry[tstamp_id] = 0;
-        shhwtstamps.hwtstamp = ns_to_ktime(alinx_sysclock_to_txtstamp(priv->pdev, tx_tstamp));
-        priv->last_tx_tstamp[tstamp_id] = tx_tstamp;
+        common->tstamp_retry[tstamp_id] = 0;
+        shhwtstamps.hwtstamp = ns_to_ktime(alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp));
+        common->last_tx_tstamp[tstamp_id] = tx_tstamp;
 
-        priv->tx_work_skb[tstamp_id] = NULL;
-        clear_bit_unlock(tstamp_id, &priv->state);
+        common->tx_work_skb[tstamp_id] = NULL;
+        clear_bit_unlock(tstamp_id, &common->state);
         skb_tstamp_tx(skb, &shhwtstamps);
         dev_kfree_skb_any(skb);
         return;
 
 return_error:
-        priv->tstamp_retry[tstamp_id] = 0;
-        clear_bit_unlock(tstamp_id, &priv->state);
+        common->tstamp_retry[tstamp_id] = 0;
+        clear_bit_unlock(tstamp_id, &common->state);
         return;
 
 retry:
-        schedule_work(&priv->tx_work[tstamp_id]);
+        schedule_work(&common->tx_work[tstamp_id]);
         return;
 }
 

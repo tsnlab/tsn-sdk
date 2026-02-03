@@ -83,10 +83,11 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct tx_metadata* metadata = (struct tx_metadata*)&tx_buf->metadata;
 	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
 	struct tsn_config* tsn_config = &xdev->tsn_config;
-	struct xdma_private* priv = netdev_priv(xdev->ndev);
+	struct xdma_private* priv = netdev_priv(xdev->ndev[0]);  // TODO: TSN config per port
+	struct xdma_private_common* common = priv->common;
 
 	vlan_prio = tsn_get_vlan_prio(tsn_config, skb);
-	tc_id = tsn_get_mqprio_tc(xdev->ndev, vlan_prio);
+	tc_id = tsn_get_mqprio_tc(priv->ndev, vlan_prio);
 	is_gptp = is_gptp_packet(tx_buf->data);
 
 	if (is_gptp) {
@@ -155,7 +156,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	metadata->delay_to.tick = tsn_timestamp_to_sysclock(pdev, timestamps.delay_to);
 	metadata->delay_to.priority = queue_prio;
 
-	if (priv->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
+	if (common->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_NONE;
 	} else if (is_gptp) {
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_GPTP;
@@ -483,7 +484,7 @@ int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload)
 		return -EINVAL;
 	}
 
-	if ((ret = netdev_set_num_tc(xdev->ndev, qopt.num_tc)) < 0) {
+	if ((ret = netdev_set_num_tc(xdev->ndev[0], qopt.num_tc)) < 0) {
 		pr_err("Failed to set num_tc\n");
 		return ret;
 	}
@@ -494,13 +495,13 @@ int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload)
 	}
 
 	for (i = 0; i < qopt.num_tc; i++) {
-		if (netdev_set_tc_queue(xdev->ndev, i, qopt.count[i], qopt.offset[i]) < 0) {
+		if (netdev_set_tc_queue(xdev->ndev[0], i, qopt.count[i], qopt.offset[i]) < 0) {
 			pr_warn("Failed to set tc queue: tc [%u], queue [%u@%u]\n", i, qopt.count[i], qopt.offset[i]);
 		}
 	}
 
 	for (i = 0; i < TC_QOPT_BITMASK; i++) {
-		if (netdev_set_prio_tc_map(xdev->ndev, i, qopt.prio_tc_map[i]) < 0) {
+		if (netdev_set_prio_tc_map(xdev->ndev[0], i, qopt.prio_tc_map[i]) < 0) {
 			pr_warn("Failed to set tc map: prio [%u], tc [%d]\n", i, qopt.prio_tc_map[i]);
 		}
 	}

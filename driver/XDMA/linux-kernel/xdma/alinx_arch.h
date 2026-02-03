@@ -101,6 +101,13 @@ typedef uint32_t u32
 
 #define H2C_LATENCY_NS 30000 // TODO: Adjust this value dynamically
 
+/* Number of network ports per XDMA device */
+#define XDMA_NUM_PORTS 2
+#define XDMA_NUM_SPECIAL_PORTS 1
+#define XDMA_NUM_TOTAL_PORTS (XDMA_NUM_PORTS + XDMA_NUM_SPECIAL_PORTS)
+
+#define XDMA_FRER_PORT_ID XDMA_NUM_PORTS
+
 typedef u64 sysclock_t;
 typedef u64 timestamp_t;
 

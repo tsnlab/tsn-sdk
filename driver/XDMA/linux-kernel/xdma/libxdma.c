@@ -1360,14 +1360,14 @@ static irqreturn_t user_irq_service(int irq, struct xdma_user_irq *user_irq)
 	return IRQ_HANDLED;
 }
 
-static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) {
+static bool filter_rx_timestamp(struct xdma_private_common* common, struct sk_buff* skb) {
 	u8 msg_type;
 	u16 eth_type;
 	uint8_t* payload;
 	struct ptp_header* ptp;
 	struct ethhdr* eth;
 	struct tsn_vlan_hdr* vlan;
-	int rx_filter = priv->tstamp_config.rx_filter;
+	int rx_filter = common->tstamp_config.rx_filter;
 	if (rx_filter == HWTSTAMP_FILTER_NONE) {
 		return false;
 	} else if (rx_filter == HWTSTAMP_FILTER_ALL) {
@@ -1417,68 +1417,71 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 
 void xdma_rx_poll_work(struct work_struct *work) {
 	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
-	struct xdma_private* priv = container_of(delayed_work, struct xdma_private, rx_poll_work);
-	struct xdma_dev *xdev = priv->xdev;
-	struct net_device *ndev = xdev->ndev;
+	struct xdma_private_common* common = container_of(delayed_work, struct xdma_private_common, rx_poll_work);
+	struct xdma_dev *xdev = common->xdev;
+	// struct net_device *ndev = xdev->ndev;
 	struct xdma_engine *engine = &xdev->engine_c2h[0];
 	unsigned long flags;
 	int target_port;
 	unsigned long now_j = jiffies;
 
-	if (!rx_poll_mode) {
-		schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
-		return;
-	}
+	schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
+	// TODO: Restore this
 
-	if (!ndev || !netif_running(ndev)) {
-		schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
-		return;
-	}
+	// if (!rx_poll_mode) {
+	// 	schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
+	// 	return;
+	// }
 
-	/* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
-	{
-		unsigned long since_switch = jiffies_to_msecs(now_j - priv->last_switch_jiffies);
-		if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
-			target_port = (priv->rx_port == 0) ? 1 : 0;
-		} else {
-			target_port = priv->rx_port;
-		}
-	}
+	// if (!ndev || !netif_running(ndev)) {
+	// 	schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
+	// 	return;
+	// }
 
-	/* Switch port if needed and restart DMA to trigger transfer */
-	if (priv->rx_port != target_port) {
-		u32 tx_port_bits = (priv->tx_port == 0) ? TSN_TX_PORT0 : TSN_TX_PORT1;
-		u32 rx_port_bits = (target_port == 0) ? TSN_RX_PORT0 : TSN_RX_PORT1;
-		u32 lo, hi;
+	// /* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
+	// {
+	// 	unsigned long since_switch = jiffies_to_msecs(now_j - priv->last_switch_jiffies);
+	// 	if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
+	// 		target_port = (priv->rx_port == 0) ? 1 : 0;
+	// 	} else {
+	// 		target_port = priv->rx_port;
+	// 	}
+	// }
 
-		spin_lock_irqsave(&priv->rx_lock, flags);
+	// /* Switch port if needed and restart DMA to trigger transfer */
+	// if (priv->rx_port != target_port) {
+	// 	u32 tx_port_bits = (priv->tx_port == 0) ? TSN_TX_PORT0 : TSN_TX_PORT1;
+	// 	u32 rx_port_bits = (target_port == 0) ? TSN_RX_PORT0 : TSN_RX_PORT1;
+	// 	u32 lo, hi;
 
-		/* Stop DMA first */
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-		channel_interrupts_disable(xdev, engine->irq_bitmask);
-		channel_interrupts_disable(xdev, xdev->mask_irq_h2c);
+	// 	spin_lock_irqsave(&priv->rx_lock, flags);
 
-		/* Switch the port */
-		iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
-			  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
-		priv->rx_port = target_port;
-		priv->last_switch_jiffies = now_j;
+	// 	/* Stop DMA first */
+	// 	iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+	// 	channel_interrupts_disable(xdev, engine->irq_bitmask);
+	// 	channel_interrupts_disable(xdev, xdev->mask_irq_h2c);
 
-		/* Full DMA restart: clear status and re-write descriptor address */
-		ioread32(&engine->regs->status_rc);
-		lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
-		hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
-		iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
-		iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
-		channel_interrupts_enable(xdev, engine->irq_bitmask);
-		channel_interrupts_enable(xdev, xdev->mask_irq_h2c);
-		iowrite32(DMA_ENGINE_START, &engine->regs->control);
+	// 	/* Switch the port */
+	// 	iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
+	// 		  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	// 	priv->rx_port = target_port;
+	// 	priv->last_switch_jiffies = now_j;
 
-		spin_unlock_irqrestore(&priv->rx_lock, flags);
-	}
+	// 	/* Full DMA restart: clear status and re-write descriptor address */
+	// 	ioread32(&engine->regs->status_rc);
+	// 	lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
+	// 	hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
+	// 	iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
+	// 	iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
+	// 	channel_interrupts_enable(xdev, engine->irq_bitmask);
+	// 	channel_interrupts_enable(xdev, xdev->mask_irq_h2c);
+	// 	iowrite32(DMA_ENGINE_START, &engine->regs->control);
 
-	/* Reschedule poll work */
-	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+	// 	spin_unlock_irqrestore(&priv->rx_lock, flags);
+	// }
+
+	// /* Reschedule poll work */
+	// schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 }
 
 /*
@@ -1499,6 +1502,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	struct xdma_dev *xdev;
 	struct xdma_engine *engine;
 	struct xdma_private *priv;
+	struct xdma_private_common *common;
 	struct xdma_result *result;
 	struct rx_buffer *rx_buffer;
 
@@ -1530,33 +1534,34 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	if (ch_irq)
 		channel_interrupts_disable(xdev, ch_irq);
 
-	ndev = xdev->ndev;
+	ndev = xdev->ndev[0];
 	if (!ndev) {
 		pr_err("Invalid net device\n");
 		return IRQ_NONE;
 	}
 
 	priv = netdev_priv(ndev);
+	common = priv->common;
 	mask = ch_irq & xdev->mask_irq_c2h;
 	if (mask) {
 		engine = &xdev->engine_c2h[0];
 
 		/* Always handle RX in ISR - poll work only switches ports */
 		dbg_info("xdma_isr c2h");
-		result = priv->res;
-		rx_buffer = (struct rx_buffer*)priv->rx_buffer;
+		result = common->res;
+		rx_buffer = (struct rx_buffer*)common->rx_buffer;
 
 #ifdef __LIBXDMA_DEBUG__
 		assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
 #endif
-		spin_lock_irqsave(&priv->rx_lock, flag);
+		spin_lock_irqsave(&common->rx_lock, flag);
 		engine_status_read(engine, 1, 0);
 		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
 		if (skb_len < 0) {
 			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
+			spin_unlock_irqrestore(&common->rx_lock, flag);
 			pr_err("Invalid skb_len\n");
 			return IRQ_NONE;
 		}
@@ -1565,21 +1570,21 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
+			spin_unlock_irqrestore(&common->rx_lock, flag);
 			pr_err("Failed to allocate skb\n");
 			return IRQ_NONE;
 		}
 		memcpy(skb_put(skb, skb_len),
-		       priv->rx_buffer + RX_METADATA_SIZE,
+		       common->rx_buffer + RX_METADATA_SIZE,
 		       skb_len);
-		if (filter_rx_timestamp(priv, skb)) {
+		if (filter_rx_timestamp(common, skb)) {
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
 		}
 		skb->dev = ndev;
 
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
 		if (enable_cb || (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled)) {
-			int rx_port_id = priv->rx_port;
+			int rx_port_id = common->rx_port;
 
 			struct ethhdr *eth = (struct ethhdr *)(rx_buffer->data);
 			struct frer_stream *stream;
@@ -1601,7 +1606,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 				iowrite32(DMA_ENGINE_START, &engine->regs->control);
-				spin_unlock_irqrestore(&priv->rx_lock, flag);
+				spin_unlock_irqrestore(&common->rx_lock, flag);
 				return IRQ_HANDLED;
 			}
 		}
@@ -1612,7 +1617,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 		iowrite32(DMA_ENGINE_START, &engine->regs->control);
-		spin_unlock_irqrestore(&priv->rx_lock, flag);
+		spin_unlock_irqrestore(&common->rx_lock, flag);
 	}
 
 	mask = ch_irq & xdev->mask_irq_h2c;
@@ -1621,17 +1626,17 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		engine = &xdev->engine_h2c[0];
 
 		engine_status_read(engine, 1, 0);
-		if (priv->tx_skb == NULL) {
+		if (common->tx_skb == NULL) {
 			pr_err("Invalid h2c interrupt\n");
 			return IRQ_NONE;
 		}
 
-		q = skb_get_queue_mapping(priv->tx_skb);
+		q = skb_get_queue_mapping(common->tx_skb);
 
 		/* Free last resource */
-		dma_unmap_single(&xdev->pdev->dev, priv->tx_dma_addr, priv->tx_skb->len, DMA_TO_DEVICE);
-		dev_kfree_skb_any(priv->tx_skb);
-		priv->tx_skb = NULL;
+		dma_unmap_single(&xdev->pdev->dev, common->tx_dma_addr, common->tx_skb->len, DMA_TO_DEVICE);
+		dev_kfree_skb_any(common->tx_skb);
+		common->tx_skb = NULL;
 
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 		netif_wake_subqueue(ndev, q);
@@ -4735,7 +4740,9 @@ void *xdma_device_open(const char *mname, struct pci_dev *pdev, int *user_max,
 	xdev->user_max = *user_max;
 	xdev->h2c_channel_max = *h2c_channel_max;
 	xdev->c2h_channel_max = *c2h_channel_max;
-	xdev->ndev = NULL;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		xdev->ndev[i] = NULL;
+	}
 
 	xdma_device_flag_set(xdev, XDEV_FLAG_OFFLINE);
 

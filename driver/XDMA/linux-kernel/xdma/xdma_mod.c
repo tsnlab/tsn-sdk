@@ -92,7 +92,7 @@ static uint64_t hash(unsigned long hostid, unsigned long num) {
 	return hash;
 }
 
-static void get_mac_address(char* mac_addr, struct xdma_dev *xdev) {
+static void get_mac_address(char* mac_addr, struct xdma_dev *xdev, int port_id) {
 	int i;
 	uint64_t hashed_num;
 	unsigned long long machine_id;
@@ -109,6 +109,7 @@ static void get_mac_address(char* mac_addr, struct xdma_dev *xdev) {
 	for (i = 0; i < ETH_ALEN; i++) {
 		mac_addr[i] = (hashed_num >> (i * 8)) & 0xFF;
 	}
+	mac_addr[5] += port_id;
 
 	// Adjust U/L, I/G bits
 	mac_addr[0] &= ~0x1; // Unicast
@@ -236,7 +237,7 @@ static int xdma_ethtool_get_ts_info(struct net_device * ndev, struct kernel_etht
 static int xdma_ethtool_get_ts_info(struct net_device * ndev, struct ethtool_ts_info * info) {
 #endif
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_pci_dev *xpdev = dev_get_drvdata(&priv->pdev->dev);
+	struct xdma_pci_dev *xpdev = dev_get_drvdata(&priv->common->pdev->dev);
 
 	info->phc_index = ptp_clock_index(xpdev->ptp->ptp_clock);
 
@@ -275,9 +276,10 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct xdma_pci_dev *xpdev = NULL;
 	struct xdma_dev *xdev;
 	void *hndl;
-	struct net_device *ndev;
-	struct xdma_private *priv;
-	struct ptp_device_data *ptp_data;
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS] = { NULL };
+	struct xdma_private *priv[XDMA_NUM_TOTAL_PORTS] = { NULL };
+	struct xdma_private_common *common = NULL;
+	struct ptp_device_data *ptp_data = NULL;
 	unsigned char mac_addr[ETH_ALEN];
 
 	xpdev = xpdev_alloc(pdev);
@@ -356,102 +358,65 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* Enable TSN and use Port 1 */
 	iowrite32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT0, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 
-	/* Allocate the network device */
-	/* TC command requires multiple TX queues */
-	ndev = alloc_etherdev_mq(sizeof(struct xdma_private), TX_QUEUE_COUNT);
-	if (!ndev) {
-		pr_err("alloc_etherdev failed\n");
-		rv = -ENOMEM;
-		goto err_out;
-	}
-	/*
-	 * Multiple RX queues drops throughput significantly.
-	 * TODO: Find out why RX queue count affects throughput
-	 * and see if it can be resolved in another way
-	 */
-	rv = netif_set_real_num_rx_queues(ndev, RX_QUEUE_COUNT);
-	if (rv) {
-		pr_err("netif_set_real_num_rx_queues failed\n");
-		goto err_out;
-	}
+	common = kzalloc(sizeof(struct xdma_private_common), GFP_KERNEL);
 
-	xdev->ndev = ndev;
-	xpdev->ndev[0] = ndev;
+	common->pdev = pdev;
+	common->xdev = xpdev->xdev;
+	common->rx_engine = &xdev->engine_c2h[0];
+	common->tx_engine = &xdev->engine_h2c[0];
 
-	/* Set up the network interface */
-	ndev->netdev_ops = &xdma_netdev_ops;
-	ndev->ethtool_ops = &xdma_ethtool_ops;
-	SET_NETDEV_DEV(ndev, &pdev->dev);
-	priv = netdev_priv(ndev);
-	memset(priv, 0, sizeof(struct xdma_private));
-	priv->pdev = pdev;
-	priv->ndev = ndev;
-	priv->xdev = xpdev->xdev;
-	priv->rx_engine = &xdev->engine_c2h[0];
-	priv->tx_engine = &xdev->engine_h2c[0];
-
-	priv->tx_desc = dma_alloc_coherent(
+	common->tx_desc = dma_alloc_coherent(
 				&pdev->dev,
 				sizeof(struct xdma_desc),
-				&priv->tx_bus_addr,
+				&common->tx_bus_addr,
 				GFP_KERNEL);
-	if (!priv->tx_desc) {
+	if (!common->tx_desc) {
 		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
 		rv = -ENOMEM;
 		goto err_out;
 	}
 
-	priv->rx_desc = dma_alloc_coherent(
+	common->rx_desc = dma_alloc_coherent(
 				&pdev->dev,
 				sizeof(struct xdma_desc),
-				&priv->rx_bus_addr,
+				&common->rx_bus_addr,
 				GFP_KERNEL);
-	if (!priv->rx_desc) {
+	if (!common->rx_desc) {
 		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
 		rv = -ENOMEM;
 		goto err_out;
 	}
 
-	priv->res = dma_alloc_coherent(&pdev->dev, sizeof(struct xdma_result), &priv->res_dma_addr, GFP_KERNEL);
-	if (!priv->res) {
+	common->res = dma_alloc_coherent(&pdev->dev, sizeof(struct xdma_result), &common->res_dma_addr, GFP_KERNEL);
+	if (!common->res) {
 		pr_err("res dma_alloc_coherent failed\n");
-		free_netdev(ndev);
 		rv = -ENOMEM;
 		goto err_out;
 	}
 
-	spin_lock_init(&priv->tx_lock);
-	spin_lock_init(&priv->rx_lock);
+	spin_lock_init(&common->tx_lock);
+	spin_lock_init(&common->rx_lock);
 
-	/* Set the MAC address */
-	get_mac_address(mac_addr, xdev);
-	dev_addr_set(ndev, mac_addr);
-
-	priv->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &priv->rx_dma_addr, GFP_KERNEL);
-	if (!priv->rx_buffer) {
+	common->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &common->rx_dma_addr, GFP_KERNEL);
+	if (!common->rx_buffer) {
 		pr_err("buffer dma_alloc_coherent failed\n");
-		free_netdev(ndev);
 		rv = -ENOMEM;
 		goto err_out;
 	}
 
 	/* Tx works for each timestamp id */
-	INIT_WORK(&priv->tx_work[1], xdma_tx_work1);
-	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
-	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
-	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
-	INIT_DELAYED_WORK(&priv->rx_poll_work, xdma_rx_poll_work);
-	schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+	INIT_WORK(&common->tx_work[1], xdma_tx_work1);
+	INIT_WORK(&common->tx_work[2], xdma_tx_work2);
+	INIT_WORK(&common->tx_work[3], xdma_tx_work3);
+	INIT_WORK(&common->tx_work[4], xdma_tx_work4);
+	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
+	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 
-	priv->tx_port = 0;
-	priv->rx_port = 0;
+	common->rx_port = 0;
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);
 	if (!ptp_data) {
 		pr_err("ptp_device_init failed\n");
-		free_netdev(ndev);
 		rv = -ENOMEM;
 		goto err_out;
 	}
@@ -459,11 +424,51 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	ptp_data->xdev = xpdev->xdev;
 	xpdev->ptp = ptp_data;
 
-	rv = register_netdev(ndev);
-	if (rv < 0) {
-		free_netdev(ndev);
-		pr_err("register_netdev failed\n");
-		goto err_out;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		/* Allocate the network device */
+		/* TC command requires multiple TX queues */
+		ndev[i] = alloc_etherdev_mq(sizeof(struct xdma_private), TX_QUEUE_COUNT);
+		if (!ndev[i]) {
+			pr_err("alloc_etherdev failed\n");
+			rv = -ENOMEM;
+			goto err_out;
+		}
+
+		/*
+		* Multiple RX queues drops throughput significantly.
+		* TODO: Find out why RX queue count affects throughput
+		* and see if it can be resolved in another way
+		*/
+		rv = netif_set_real_num_rx_queues(ndev[i], RX_QUEUE_COUNT);
+		if (rv) {
+			pr_err("netif_set_real_num_rx_queues failed\n");
+			goto err_out;
+		}
+
+		/* Set up the network interface */
+		xdev->ndev[i] = ndev[i];
+		xpdev->ndev[i] = ndev[i];
+		ndev[i]->netdev_ops = &xdma_netdev_ops;
+		ndev[i]->ethtool_ops = &xdma_ethtool_ops;
+		SET_NETDEV_DEV(ndev[i], &pdev->dev);
+		ndev[i]->dev_port = i + 1;
+		priv[i] = netdev_priv(ndev[i]);
+		memset(priv[i], 0, sizeof(struct xdma_private));
+		priv[i]->ndev = ndev[i];
+		priv[i]->port_id = i;
+		priv[i]->common = common;
+
+		/* Set the MAC address */
+		get_mac_address(mac_addr, xdev, i >= XDMA_NUM_PORTS ? 0 : i);
+		dev_addr_set(ndev[i], mac_addr);
+	}
+
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		rv = register_netdev(ndev[i]);
+		if (rv < 0) {
+			pr_err("register_netdev failed\n");
+			goto err_out;
+		}
 	}
 	channel_interrupts_enable(xdev, ~0);
 	//netif_stop_queue(ndev);
@@ -471,7 +476,36 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 
 err_out:
 	pr_err("pdev 0x%p, err %d.\n", pdev, rv);
+
+	if (common != NULL) {
+		if (common->tx_desc != NULL) {
+			dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->tx_desc, common->tx_bus_addr);
+		}
+		if (common->rx_desc != NULL) {
+			dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->rx_desc, common->rx_bus_addr);
+		}
+		if (common->rx_buffer != NULL) {
+			dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, common->rx_buffer, common->rx_dma_addr);
+		}
+		if (common->res != NULL) {
+			dma_free_coherent(&pdev->dev, sizeof(struct xdma_result), common->res, common->res_dma_addr);
+		}
+		cancel_delayed_work(&common->rx_poll_work);
+		kfree(common);
+	}
+
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (ndev[i] != NULL) {
+			unregister_netdev(ndev[i]);
+			free_netdev(ndev[i]);
+		}
+	}
+
+	if (ptp_data != NULL) {
+		ptp_device_destroy(ptp_data);
+	}
 	xpdev_free(xpdev);
+	dev_set_drvdata(&pdev->dev, NULL);
 	return rv;
 }
 
@@ -481,6 +515,7 @@ static void remove_one(struct pci_dev *pdev)
 	struct xdma_dev *xdev;
 	struct net_device *ndev;
 	struct xdma_private *priv;
+	struct xdma_private_common *common;
 	struct ptp_device_data *ptp_data;
 
 	if (!pdev)
@@ -493,22 +528,28 @@ static void remove_one(struct pci_dev *pdev)
 	pr_info("pdev 0x%p, xdev 0x%p, 0x%p.\n",
 		pdev, xpdev, xpdev->xdev);
 
-	ndev = xpdev->ndev[0];
-	if (!ndev) {
-		pr_err("ndev is NULL\n");
-		return;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (!xpdev->ndev[i]) {
+			pr_err("ndev is NULL\n");
+			return;
+		}
 	}
-	priv = netdev_priv(ndev);
+	priv = netdev_priv(xpdev->ndev[0]);
+	common = priv->common;
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
-	cancel_delayed_work(&priv->rx_poll_work);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
-	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_result), priv->res, priv->res_dma_addr);
-	unregister_netdev(ndev);
+	cancel_delayed_work(&common->rx_poll_work);
+	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->tx_desc, common->tx_bus_addr);
+	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->rx_desc, common->rx_bus_addr);
+	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, common->rx_buffer, common->rx_dma_addr);
+	dma_free_coherent(&pdev->dev, sizeof(struct xdma_result), common->res, common->res_dma_addr);
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		ndev = xpdev->ndev[i];
+		unregister_netdev(ndev);
+		free_netdev(ndev);
+	}
+	kfree(common);
 	ptp_device_destroy(ptp_data);
-	free_netdev(ndev);
 	xpdev_free(xpdev);
 	dev_set_drvdata(&pdev->dev, NULL);
 }

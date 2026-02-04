@@ -1639,7 +1639,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		common->tx_skb = NULL;
 
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-		netif_wake_subqueue(ndev, q);
+		xdma_start_all_queues(xdev);
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 	}
 	xdev->irq_count++;
@@ -5096,4 +5096,80 @@ int engine_addrmode_set(struct xdma_engine *engine, unsigned long arg)
 	engine_alignments(engine);
 
 	return rv;
+}
+
+void xdma_stop_all_queues(struct xdma_dev *xdev) {
+    for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		netif_tx_stop_all_queues(xdev->ndev[i]);
+    }
+}
+
+void xdma_start_all_queues(struct xdma_dev *xdev) {
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		netif_tx_wake_all_queues(xdev->ndev[i]);
+	}
+}
+
+static uint32_t xdma_convert_port_to_bits(int tx_port, int rx_port) {
+	uint32_t ret = 0;
+	switch (tx_port) {
+		case 0:
+			ret |= TSN_TX_PORT0;
+			break;
+		case 1:
+			ret |= TSN_TX_PORT1;
+			break;
+		default:
+			ret |= TSN_TX_PORT0;
+			break;
+	}
+	switch (rx_port) {
+		case 0:
+			ret |= TSN_RX_PORT0;
+			break;
+		case 1:
+			ret |= TSN_RX_PORT1;
+			break;
+		default:
+			ret |= TSN_RX_PORT0;
+			break;
+	}
+	return ret;
+}
+
+void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port) {
+	struct xdma_private *priv = netdev_priv(xdev->ndev[0]);
+	struct xdma_private_common *common = priv->common;
+	struct xdma_engine *engine = &xdev->engine_c2h[0];
+	unsigned long flags;
+	u32 lo, hi;
+
+	if (common->tx_port == tx_port && common->rx_port == rx_port) {
+		return;
+	}
+
+	spin_lock_irqsave(&common->rx_lock, flags);
+
+	/* Stop DMA first */
+	iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+	channel_interrupts_disable(xdev, engine->irq_bitmask);
+	channel_interrupts_disable(xdev, xdev->mask_irq_h2c);
+
+	/* Switch the port */
+	iowrite32(TSN_ENABLE | xdma_convert_port_to_bits(tx_port, rx_port),
+			xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	common->tx_port = tx_port;
+	common->rx_port = rx_port;
+
+	/* Full DMA restart: clear status and re-write descriptor address */
+	ioread32(&engine->regs->status_rc);
+	lo = cpu_to_le32(PCI_DMA_L(common->rx_bus_addr));
+	hi = cpu_to_le32(PCI_DMA_H(common->rx_bus_addr));
+	iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
+	iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
+	channel_interrupts_enable(xdev, engine->irq_bitmask);
+	channel_interrupts_enable(xdev, xdev->mask_irq_h2c);
+	iowrite32(DMA_ENGINE_START, &engine->regs->control);
+
+	spin_unlock_irqrestore(&common->rx_lock, flags);
 }

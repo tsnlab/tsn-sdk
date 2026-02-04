@@ -72,6 +72,7 @@ struct xdma_private_common {
         struct delayed_work rx_poll_work;
         unsigned long last_switch_jiffies;
 
+        int tx_port;
         int rx_port;
 
         uint64_t total_tx_count;

@@ -133,12 +133,10 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         struct tx_buffer* tx_buffer;
         struct tx_metadata* tx_metadata;
         u32 to_value;
-        u16 q;
 
 
         /* Check desc count */
-        q = skb_get_queue_mapping(skb);
-        netif_stop_subqueue(ndev, q);
+        netif_tx_stop_all_queues(ndev);
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
         skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
@@ -148,7 +146,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         if (skb_padto(skb, skb->len)) {
                 pr_err("skb_padto failed\n");
-                netif_wake_subqueue(ndev, q);
+                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -158,7 +156,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
 #endif
-                netif_wake_subqueue(ndev, q);
+                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -168,7 +166,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("pskb_expand_head failed\n");
 #endif
-                netif_wake_subqueue(ndev, q);
+                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -192,7 +190,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
 		pr_warn("tsn_fill_metadata failed\n");
 #endif
-		netif_wake_subqueue(ndev, q);
+		xdma_start_all_queues(xdev);
 		return NETDEV_TX_BUSY;
 	}
 
@@ -216,7 +214,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 			/* Use TX-aware R-TAG insertion */
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
-				netif_wake_subqueue(ndev, q);
+				xdma_start_all_queues(xdev);
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;
 			}
@@ -235,7 +233,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         dma_addr = dma_map_single(&xdev->pdev->dev, skb->data, skb->len, DMA_TO_DEVICE);
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
-                netif_wake_subqueue(ndev, q);
+                xdma_start_all_queues(xdev);
                 return NETDEV_TX_BUSY;
         }
 
@@ -270,6 +268,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 }
                 // TODO: track the number of skipped packets for ethtool stats
         }
+
+        xdma_swap_ports(xdev, priv->port_id, common->rx_port);
 
         /* netif_wake_queue() will be called in xdma_isr() */
         common->tx_dma_addr = dma_addr;

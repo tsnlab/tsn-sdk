@@ -412,6 +412,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
 	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 
+	common->tx_port = 0;
 	common->rx_port = 0;
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);

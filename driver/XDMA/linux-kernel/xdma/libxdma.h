@@ -710,4 +710,8 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 void channel_interrupts_disable(struct xdma_dev *xdev, u32 mask);
 void channel_interrupts_enable(struct xdma_dev *xdev, u32 mask);
 void xdma_rx_poll_work(struct work_struct *work);
+
+void xdma_stop_all_queues(struct xdma_dev *xdev);
+void xdma_start_all_queues(struct xdma_dev *xdev);
+void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port);
 #endif /* XDMA_LIB_H */

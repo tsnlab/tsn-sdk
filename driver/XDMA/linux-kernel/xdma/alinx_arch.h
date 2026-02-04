@@ -64,9 +64,6 @@ typedef uint32_t u32
 #define TSN_RX_PORT0 0b00
 #define TSN_RX_PORT1 0b10
 
-#define TSN_TX_PORT(n) (TSN_TX_PORT##n)
-#define TSN_RX_PORT(n) (TSN_RX_PORT##n)
-
 #define RX_POLL_WORK_INTERVAL_US (100)
 
 #define TX_QUEUE_COUNT 8

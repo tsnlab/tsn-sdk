@@ -39,17 +39,31 @@ static void set_ticks_scale(struct ptp_device_data *ptp_data, double ticks_scale
 sysclock_t alinx_timestamp_to_sysclock(struct pci_dev* pdev, timestamp_t timestamp) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
+        u64 offset;
+        double scale;
+        unsigned long flags;
 
-        return (timestamp - ptp_data->offset) / ptp_data->ticks_scale;
+        spin_lock_irqsave(&ptp_data->lock, flags);
+        offset = ptp_data->offset;
+        scale = ptp_data->ticks_scale;
+        spin_unlock_irqrestore(&ptp_data->lock, flags);
+
+        return (timestamp - offset) / scale;
 }
 
 timestamp_t alinx_sysclock_to_timestamp(struct pci_dev* pdev, sysclock_t sysclock) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
+        u64 offset;
+        double scale;
+        unsigned long flags;
 
-        u64 offset = ptp_data->offset;
+        spin_lock_irqsave(&ptp_data->lock, flags);
+        offset = ptp_data->offset;
+        scale = ptp_data->ticks_scale;
+        spin_unlock_irqrestore(&ptp_data->lock, flags);
 
-        return alinx_get_timestamp(sysclock, ptp_data->ticks_scale, offset);
+        return alinx_get_timestamp(sysclock, scale, offset);
 }
 
 timestamp_t alinx_get_rx_timestamp(struct pci_dev* pdev, sysclock_t sysclock) {
@@ -69,8 +83,14 @@ timestamp_t alinx_sysclock_to_txtstamp(struct pci_dev* pdev, sysclock_t sysclock
 double alinx_get_ticks_scale(struct pci_dev* pdev) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
+        double scale;
+        unsigned long flags;
 
-        return ptp_data->ticks_scale;
+        spin_lock_irqsave(&ptp_data->lock, flags);
+        scale = ptp_data->ticks_scale;
+        spin_unlock_irqrestore(&ptp_data->lock, flags);
+
+        return scale;
 }
 
 void alinx_set_ticks_scale(struct pci_dev* pdev, double ticks_scale) {

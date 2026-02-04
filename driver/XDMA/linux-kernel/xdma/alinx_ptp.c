@@ -119,6 +119,11 @@ static int alinx_ptp_gettimex(struct ptp_clock_info *ptp, struct timespec64 *ts,
         ptp_read_system_postts(sts);
 
         timestamp = alinx_get_timestamp(clock, ptp_data->ticks_scale, ptp_data->offset);
+        /* Never report time going backward (avoids ptp4l SYNCHRONIZATION_FAULT) */
+        if (timestamp < ptp_data->last_timestamp_ns)
+                timestamp = ptp_data->last_timestamp_ns;
+        else
+                ptp_data->last_timestamp_ns = timestamp;
 
         ts->tv_sec = timestamp / NS_IN_1S;
         ts->tv_nsec = timestamp % NS_IN_1S;
@@ -153,6 +158,7 @@ static int alinx_ptp_settime(struct ptp_clock_info *ptp, const struct timespec64
         hw_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale, ptp_data->offset);
 
         ptp_data->offset = host_timestamp - hw_timestamp;
+        ptp_data->last_timestamp_ns = host_timestamp;
 
         set_cycle_1s(ptp_data, RESERVED_CYCLE);
         set_pulse_at(ptp_data, sys_clock);

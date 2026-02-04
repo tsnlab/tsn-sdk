@@ -111,6 +111,7 @@ struct ptp_device_data {
         struct xdma_dev *xdev;
         double ticks_scale;
         u64 offset;
+        u64 last_timestamp_ns;  /* monotonicity safeguard for gettimex */
         spinlock_t lock;
 #ifdef __LIBXDMA_DEBUG__
         u32 ptp_id;

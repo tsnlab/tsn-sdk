@@ -106,7 +106,8 @@ typedef uint32_t u32
 #define XDMA_NUM_SPECIAL_PORTS 1
 #define XDMA_NUM_TOTAL_PORTS (XDMA_NUM_PORTS + XDMA_NUM_SPECIAL_PORTS)
 
-#define XDMA_FRER_PORT_ID XDMA_NUM_PORTS
+#define XDMA_SPECIAL_PORT_ID_START 10
+#define XDMA_FRER_PORT_ID (XDMA_SPECIAL_PORT_ID_START + 0)
 
 typedef u64 sysclock_t;
 typedef u64 timestamp_t;

@@ -268,7 +268,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 // TODO: track the number of skipped packets for ethtool stats
         }
 
-        xdma_swap_ports(xdev, priv->port_id, common->rx_port);
+        xdma_swap_ports(xdev, priv->physical_port_id, common->rx_port);
 
         /* netif_wake_queue() will be called in xdma_isr() */
         common->tx_dma_addr = dma_addr;

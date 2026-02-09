@@ -457,6 +457,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		memset(priv[i], 0, sizeof(struct xdma_private));
 		priv[i]->ndev = ndev[i];
 		priv[i]->port_id = i;
+		priv[i]->physical_port_id = i >= XDMA_NUM_PORTS ? 0 : i;
 		priv[i]->common = common;
 
 		switch (i) {

@@ -89,6 +89,7 @@ struct xdma_private {
         struct xdma_private_common *common;
         struct net_device *ndev;
         int port_id;
+        int physical_port_id; /* 0 or 1 */
         uint32_t port_flag;
 };
 

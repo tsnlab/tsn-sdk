@@ -72,11 +72,6 @@ module_param(rx_poll_mode, uint, 0644);
 MODULE_PARM_DESC(rx_poll_mode,
 		 "Use polling for RX (both ports), default is 1 (enabled)");
 
-unsigned int enable_cb = 0;
-module_param(enable_cb, uint, 0644);
-MODULE_PARM_DESC(enable_cb,
-		 "Enable 802.1CB (FRER) duplicate elimination, default is 0 (disabled)");
-
 #define XDMA_PERF_NUM_DESC 128
 
 /* Kernel version adaptative code */
@@ -1555,10 +1550,9 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		if (filter_rx_timestamp(common, skb)) {
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
 		}
-		skb->dev = ndev;
 
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
-		if (enable_cb || (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled)) {
+		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
 			int rx_port_id = common->rx_port;
 
 			struct ethhdr *eth = (struct ethhdr *)(rx_buffer->data);
@@ -1584,8 +1578,13 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 				spin_unlock_irqrestore(&common->rx_lock, flag);
 				return IRQ_HANDLED;
 			}
+
+			if (frer_result != FRER_NO_RTAG) {
+				ndev = xdev->ndev[XDMA_FRER_PORT_ID];
+			}
 		}
 
+		skb->dev = ndev;
 		skb->protocol = eth_type_trans(skb, ndev);
 		netif_rx(skb);
 

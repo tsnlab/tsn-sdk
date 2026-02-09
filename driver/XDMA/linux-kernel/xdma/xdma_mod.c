@@ -452,12 +452,20 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		ndev[i]->netdev_ops = &xdma_netdev_ops;
 		ndev[i]->ethtool_ops = &xdma_ethtool_ops;
 		SET_NETDEV_DEV(ndev[i], &pdev->dev);
-		ndev[i]->dev_port = i >= XDMA_NUM_PORTS ? XDMA_SPECIAL_PORT_ID_START + (i - XDMA_NUM_PORTS) : i + 1;
+		ndev[i]->dev_port = i >= XDMA_NUM_PORTS ? XDMA_SPECIAL_DEV_PORT_START + (i - XDMA_NUM_PORTS) : i + 1;
 		priv[i] = netdev_priv(ndev[i]);
 		memset(priv[i], 0, sizeof(struct xdma_private));
 		priv[i]->ndev = ndev[i];
 		priv[i]->port_id = i;
 		priv[i]->common = common;
+
+		switch (i) {
+			case XDMA_FRER_PORT_ID:
+				priv[i]->port_flag |= XDMA_PORT_FLAG_FRER;
+				break;
+			default:
+				break;
+		}
 
 		/* Set the MAC address */
 		get_mac_address(mac_addr, xdev, i >= XDMA_NUM_PORTS ? 0 : i);

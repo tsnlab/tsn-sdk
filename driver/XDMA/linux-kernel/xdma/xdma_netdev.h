@@ -86,9 +86,10 @@ struct xdma_private_common {
 };
 
 struct xdma_private {
-        struct net_device *ndev;
-        int port_id;    /* Port ID for FRER (0 or 1) */
         struct xdma_private_common *common;
+        struct net_device *ndev;
+        int port_id;
+        uint32_t port_flag;
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)

@@ -32,6 +32,7 @@
 #define FRER_PASS		0
 #define FRER_DROP_DUPLICATE	1
 #define FRER_DROP_OUT_OF_WINDOW	2
+#define FRER_NO_RTAG		3
 #define FRER_ERROR		-1
 
 /* R-TAG structure (IEEE 802.1CB)

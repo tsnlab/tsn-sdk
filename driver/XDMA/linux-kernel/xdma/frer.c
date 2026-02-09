@@ -556,9 +556,9 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  *   FRER_PASS - Frame should be accepted (R-TAG stripped)
  *   FRER_DROP_DUPLICATE - Frame is a duplicate and should be dropped
  *   FRER_DROP_OUT_OF_WINDOW - Frame is too old (outside history window)
+ *   FRER_NO_RTAG - Frame does not contain R-TAG
  *   FRER_ERROR - Error processing frame
  */
-extern unsigned int enable_cb;
 int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id)
 {
 	struct ethhdr *eth;
@@ -574,8 +574,8 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 	int bit_pos;
 	bool valid_port = (port_id >= 0 && port_id < MAX_FRER_PORTS);
 
-	if (!enable_cb && !frer->enabled) {
-		return FRER_PASS;
+	if (!frer->enabled) {
+		return FRER_NO_RTAG;
 	}
 
 	eth = (struct ethhdr *)skb->data;
@@ -590,14 +590,14 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 		struct vlan_hdr *vhdr = (struct vlan_hdr *)(skb->data + ETH_HLEN);
 		if (ntohs(vhdr->h_vlan_encapsulated_proto) != ETH_P_RTAG) {
 			/* No R-TAG present */
-			return FRER_PASS;
+			return FRER_NO_RTAG;
 		}
 		rtag_offset = ETH_HLEN - sizeof(__be16) + VLAN_HLEN;
 	} else if (ntohs(proto) == ETH_P_RTAG) {
 		rtag_offset = ETH_HLEN - sizeof(__be16);
 	} else {
 		/* No R-TAG present */
-		return FRER_PASS;
+		return FRER_NO_RTAG;
 	}
 
 	/* Validate packet length */

@@ -205,7 +205,8 @@ void tsn_init_configs(struct pci_dev* pdev) {
 	config->frer = kzalloc(sizeof(struct frer_config), GFP_KERNEL);
 	if (config->frer) {
 		frer_init(config->frer);
-		pr_info("FRER (802.1CB) initialized (disabled)\n");
+		config->frer->enabled = true;
+		pr_info("FRER (802.1CB) initialized\n");
 	} else {
 		pr_warn("Failed to allocate FRER configuration\n");
 	}

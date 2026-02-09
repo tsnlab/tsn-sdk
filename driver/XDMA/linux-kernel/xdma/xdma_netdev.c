@@ -194,9 +194,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_BUSY;
 	}
 
-	extern unsigned int enable_cb;
 	/* FRER (802.1CB): Insert R-TAG with auto stream registration */
-	if (enable_cb || (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled)) {
+	if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled && (priv->port_flag & XDMA_PORT_FLAG_FRER)) {
 		struct ethhdr *eth = (struct ethhdr *)(tx_buffer->data);
 		struct frer_stream *stream;
 		unsigned long frer_flags;

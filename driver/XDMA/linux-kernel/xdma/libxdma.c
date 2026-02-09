@@ -1419,69 +1419,43 @@ void xdma_rx_poll_work(struct work_struct *work) {
 	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
 	struct xdma_private_common* common = container_of(delayed_work, struct xdma_private_common, rx_poll_work);
 	struct xdma_dev *xdev = common->xdev;
-	// struct net_device *ndev = xdev->ndev;
-	struct xdma_engine *engine = &xdev->engine_c2h[0];
-	unsigned long flags;
 	int target_port;
 	unsigned long now_j = jiffies;
 
-	schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
-	// TODO: Restore this
+	if (!rx_poll_mode) {
+		schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
+		return;
+	}
 
-	// if (!rx_poll_mode) {
-	// 	schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
-	// 	return;
-	// }
+	bool is_running = false;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (xdev->ndev[i] && netif_running(xdev->ndev[i])) {
+			is_running = true;
+			break;
+		}
+	}
 
-	// if (!ndev || !netif_running(ndev)) {
-	// 	schedule_delayed_work(&priv->rx_poll_work, msecs_to_jiffies(100));
-	// 	return;
-	// }
+	if (!is_running) {
+		schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
+		return;
+	}
 
-	// /* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
-	// {
-	// 	unsigned long since_switch = jiffies_to_msecs(now_j - priv->last_switch_jiffies);
-	// 	if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
-	// 		target_port = (priv->rx_port == 0) ? 1 : 0;
-	// 	} else {
-	// 		target_port = priv->rx_port;
-	// 	}
-	// }
+	/* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
+	{
+		unsigned long since_switch = jiffies_to_msecs(now_j - common->last_switch_jiffies);
+		if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
+			target_port = (common->rx_port == 0) ? 1 : 0;
+			common->last_switch_jiffies = now_j;
+		} else {
+			target_port = common->rx_port;
+		}
+	}
 
-	// /* Switch port if needed and restart DMA to trigger transfer */
-	// if (priv->rx_port != target_port) {
-	// 	u32 tx_port_bits = (priv->tx_port == 0) ? TSN_TX_PORT0 : TSN_TX_PORT1;
-	// 	u32 rx_port_bits = (target_port == 0) ? TSN_RX_PORT0 : TSN_RX_PORT1;
-	// 	u32 lo, hi;
+	/* Switch port if needed and restart DMA to trigger transfer */
+	xdma_swap_ports(xdev, common->tx_port, target_port);
 
-	// 	spin_lock_irqsave(&priv->rx_lock, flags);
-
-	// 	/* Stop DMA first */
-	// 	iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-	// 	channel_interrupts_disable(xdev, engine->irq_bitmask);
-	// 	channel_interrupts_disable(xdev, xdev->mask_irq_h2c);
-
-	// 	/* Switch the port */
-	// 	iowrite32(TSN_ENABLE | tx_port_bits | rx_port_bits,
-	// 		  xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
-	// 	priv->rx_port = target_port;
-	// 	priv->last_switch_jiffies = now_j;
-
-	// 	/* Full DMA restart: clear status and re-write descriptor address */
-	// 	ioread32(&engine->regs->status_rc);
-	// 	lo = cpu_to_le32(PCI_DMA_L(priv->rx_bus_addr));
-	// 	hi = cpu_to_le32(PCI_DMA_H(priv->rx_bus_addr));
-	// 	iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
-	// 	iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
-	// 	channel_interrupts_enable(xdev, engine->irq_bitmask);
-	// 	channel_interrupts_enable(xdev, xdev->mask_irq_h2c);
-	// 	iowrite32(DMA_ENGINE_START, &engine->regs->control);
-
-	// 	spin_unlock_irqrestore(&priv->rx_lock, flags);
-	// }
-
-	// /* Reschedule poll work */
-	// schedule_delayed_work(&priv->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+	/* Reschedule poll work */
+	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 }
 
 /*
@@ -1555,6 +1529,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
 #endif
 		spin_lock_irqsave(&common->rx_lock, flag);
+		ndev = xdev->ndev[common->rx_port];
 		engine_status_read(engine, 1, 0);
 		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
 		if (skb_len < 0) {
@@ -5144,11 +5119,12 @@ void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port) {
 	unsigned long flags;
 	u32 lo, hi;
 
+	spin_lock_irqsave(&common->rx_lock, flags);
+
 	if (common->tx_port == tx_port && common->rx_port == rx_port) {
+		spin_unlock_irqrestore(&common->rx_lock, flags);
 		return;
 	}
-
-	spin_lock_irqsave(&common->rx_lock, flags);
 
 	/* Stop DMA first */
 	iowrite32(DMA_ENGINE_STOP, &engine->regs->control);

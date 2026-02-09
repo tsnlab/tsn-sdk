@@ -468,7 +468,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		}
 
 		/* Set the MAC address */
-		get_mac_address(mac_addr, xdev, i >= XDMA_NUM_PORTS ? 0 : i);
+		get_mac_address(mac_addr, xdev, i);
 		dev_addr_set(ndev[i], mac_addr);
 	}
 

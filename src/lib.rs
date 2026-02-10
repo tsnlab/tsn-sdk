@@ -68,7 +68,7 @@ impl TsnSocket {
     }
 }
 
-fn create_vlan(ifname: &str, vlanid: u16) -> Result<String, String> {
+fn create_vlan(ifname: &str, vlanid: u16, vlan_prio: u32) -> Result<String, String> {
     let config = get_config(ifname)?;
     let shm_name = get_shmem_name(ifname, vlanid);
     let shm_fd = get_shmem_fd(&shm_name)?;
@@ -77,7 +77,7 @@ fn create_vlan(ifname: &str, vlanid: u16) -> Result<String, String> {
     let name = vlan::get_vlan_name(ifname, vlanid);
     // If I am the frist user of this vlan, create it
     let result = if vlan_vec.is_empty() {
-        vlan::create_vlan(&config, ifname, vlanid)
+        vlan::create_vlan(&config, ifname, vlanid, vlan_prio)
     } else {
         Ok(0)
     };
@@ -128,7 +128,7 @@ pub fn sock_open(
     priority: u32,
     proto: u16,
 ) -> Result<TsnSocket, String> {
-    let name = match create_vlan(ifname, vlanid) {
+    let name = match create_vlan(ifname, vlanid, priority) {
         Ok(v) => v,
         Err(_) => {
             return Err(format!("Create vlan fails {}", Error::last_os_error()));

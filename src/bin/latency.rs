@@ -90,7 +90,8 @@ fn main() {
         .arg(
             arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
                 .value_parser(value_parser!(u32))
-                .required(true),
+                .default_value("0")
+                .required(false),
         );
 
     let client_command = Command::new("client")
@@ -142,7 +143,8 @@ fn main() {
         .arg(
             arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
                 .value_parser(value_parser!(u32))
-                .required(true),
+                .default_value("0")
+                .required(false),
         );
 
     let matched_command = Command::new("latency")

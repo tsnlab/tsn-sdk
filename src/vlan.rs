@@ -87,7 +87,12 @@ pub fn setup_cbs(ifname: &str, config: &CbsConfig) -> Result<i32, String> {
     Ok(0)
 }
 
-pub fn create_vlan(config: &Config, ifname: &str, vlan_id: u16) -> Result<i32, String> {
+pub fn create_vlan(
+    config: &Config,
+    ifname: &str,
+    vlan_id: u16,
+    vlan_prio: u32,
+) -> Result<i32, String> {
     let name = get_vlan_name(ifname, vlan_id);
 
     if config.tas.is_some() && config.cbs.is_some() {

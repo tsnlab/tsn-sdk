@@ -21,7 +21,13 @@ fn main() {
                 .help("Interface name to create")
                 .required(true),
         )
-        .arg(Arg::new("vlanid").help("VLAN ID to create").required(true));
+        .arg(Arg::new("vlanid").help("VLAN ID to create").required(true))
+        .arg(
+            Arg::new("vlan_prio")
+                .help("VLAN priority (PCP, 0-7)")
+                .required(false)
+                .default_value("0"),
+        );
     let delete_parser = ClapCommand::new("delete")
         .about("Delete a TSN interface")
         .arg(&arg_config)
@@ -59,8 +65,13 @@ fn main() {
                 .unwrap()
                 .parse::<u16>()
                 .unwrap();
+            let vlan_prio = create_matches
+                .value_of("vlan_prio")
+                .unwrap_or("0")
+                .parse::<u32>()
+                .unwrap();
             let config = config.as_ref().unwrap().get(interface).unwrap();
-            create_vlan(config, interface, vlan_id).unwrap();
+            create_vlan(config, interface, vlan_id, vlan_prio).unwrap();
         }
         Some(("delete", delete_matches)) => {
             let interface = delete_matches.value_of("interface").unwrap();

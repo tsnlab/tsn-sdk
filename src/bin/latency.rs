@@ -26,8 +26,6 @@ use tsn::time::tsn_time_sleep_until;
 
 extern crate socket as soc;
 
-const VLAN_ID_PERF: u16 = 10;
-const VLAN_PRI_PERF: u32 = 3;
 const ETHERTYPE_PERF: u16 = 0x1337;
 // const ETH_P_PERF: u16 = libc::ETH_P_ALL as u16; // FIXME: use ETHERTYPE_PERF
 const ETH_P_PERF: u16 = ETHERTYPE_PERF;
@@ -56,9 +54,17 @@ enum PerfOp {
     Sync = 3,
 }
 
+struct ServerArgs {
+    interface: String,
+    vlan_id: u16,
+    vlan_pri: u32,
+}
+
 struct ClientArgs {
     interface: String,
     target: MacAddr,
+    vlan_id: u16,
+    vlan_pri: u32,
     size: usize,
     count: usize,
     interval: u64,
@@ -71,7 +77,37 @@ fn main() {
     let server_command = Command::new("server")
         .about("Server mode")
         .short_flag('s')
-        .arg(arg!(-i --interface <interface> "Interface to use").required(true));
+        .arg(
+            arg!(-i --interface <interface> "Interface to use")
+                .value_parser(value_parser!(String))
+                .required(true),
+        )
+        .arg(
+            arg!(--vlan-id <id> "VLAN ID (1-4095)")
+                .value_parser(value_parser!(u16))
+                .validator(|s| -> Result<(), String> {
+                    let v: u16 = s.parse().map_err(|_| "VLAN ID must be a number".to_string())?;
+                    if (1..=4095).contains(&v) {
+                        Ok(())
+                    } else {
+                        Err("VLAN ID must be between 1 and 4095".to_string())
+                    }
+                })
+                .required(true),
+        )
+        .arg(
+            arg!(--vlan-prio <prio> "VLAN priority (PCP, 0-7)")
+                .value_parser(value_parser!(u32))
+                .validator(|s| -> Result<(), String> {
+                    let v: u32 = s.parse().map_err(|_| "VLAN priority must be a number".to_string())?;
+                    if v <= 7 {
+                        Ok(())
+                    } else {
+                        Err("VLAN priority must be between 0 and 7".to_string())
+                    }
+                })
+                .required(true),
+        );
 
     let client_command = Command::new("client")
         .about("Client mode")
@@ -113,7 +149,33 @@ fn main() {
         )
         .arg(arg!(-p --precise "Precise mode").long_help(
             "TX packets would go on every X.000000000s. Interval and Jitter will be ignored.",
-        ));
+        ))
+        .arg(
+            arg!(--vlan-id <id> "VLAN ID (1-4095)")
+                .value_parser(value_parser!(u16))
+                .validator(|s| -> Result<(), String> {
+                    let v: u16 = s.parse().map_err(|_| "VLAN ID must be a number".to_string())?;
+                    if (1..=4095).contains(&v) {
+                        Ok(())
+                    } else {
+                        Err("VLAN ID must be between 1 and 4095".to_string())
+                    }
+                })
+                .required(true),
+        )
+        .arg(
+            arg!(--vlan-prio <prio> "VLAN priority (PCP, 0-7)")
+                .value_parser(value_parser!(u32))
+                .validator(|s| -> Result<(), String> {
+                    let v: u32 = s.parse().map_err(|_| "VLAN priority must be a number".to_string())?;
+                    if v <= 7 {
+                        Ok(())
+                    } else {
+                        Err("VLAN priority must be between 0 and 7".to_string())
+                    }
+                })
+                .required(true),
+        );
 
     let matched_command = Command::new("latency")
         .author(crate_authors!())
@@ -126,32 +188,26 @@ fn main() {
 
     match matched_command.subcommand() {
         Some(("server", sub_matches)) => {
-            let iface = sub_matches.value_of("interface").unwrap().to_string();
+            let server_args = ServerArgs {
+                interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
+                vlan_id: *sub_matches.get_one::<u16>("vlan-id").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("vlan-prio").unwrap(),
+            };
 
-            do_server(iface)
+            do_server(server_args)
         }
         Some(("client", sub_matches)) => {
-            let interface = sub_matches
-                .get_one::<String>("interface")
-                .unwrap()
-                .to_string();
-            let target = *sub_matches.get_one("target").unwrap();
-            let oneway: bool = sub_matches.is_present("oneway");
-            let size: usize = *sub_matches.get_one("size").unwrap();
-            let count: usize = *sub_matches.get_one("count").unwrap();
-            let interval = *sub_matches.get_one("interval").unwrap();
-            let jitter = *sub_matches.get_one("jitter").unwrap();
-            let precise = sub_matches.is_present("precise");
-
             let client_args = ClientArgs {
-                interface,
-                target,
-                size,
-                count,
-                interval,
-                jitter,
-                oneway,
-                precise,
+                interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
+                target: *sub_matches.get_one("target").unwrap(),
+                vlan_id: *sub_matches.get_one::<u16>("vlan-id").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("vlan-prio").unwrap(),
+                size: *sub_matches.get_one("size").unwrap(),
+                count: *sub_matches.get_one("count").unwrap(),
+                interval: *sub_matches.get_one("interval").unwrap(),
+                jitter: *sub_matches.get_one("jitter").unwrap(),
+                oneway: sub_matches.is_present("oneway"),
+                precise: sub_matches.is_present("precise"),
             };
 
             do_client(client_args)
@@ -160,13 +216,13 @@ fn main() {
     }
 }
 
-fn do_server(iface_name: String) {
-    let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
+fn do_server(args: ServerArgs) {
+    let interface_name_match = |iface: &NetworkInterface| iface.name == args.interface;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
     let my_mac = interface.mac.unwrap();
 
-    let mut sock = match tsn::sock_open(&iface_name, VLAN_ID_PERF, VLAN_PRI_PERF, ETH_P_PERF) {
+    let mut sock = match tsn::sock_open(&args.interface, args.vlan_id, args.vlan_pri, ETH_P_PERF) {
         Ok(sock) => sock,
         Err(e) => panic!("Failed to open TSN socket: {}", e),
     };
@@ -261,7 +317,7 @@ fn do_client(args: ClientArgs) {
         tsn::time::tsn_time_analyze();
     }
 
-    let mut sock = match tsn::sock_open(&args.interface, VLAN_ID_PERF, VLAN_PRI_PERF, ETH_P_PERF) {
+    let mut sock = match tsn::sock_open(&args.interface, args.vlan_id, args.vlan_pri, ETH_P_PERF) {
         Ok(sock) => sock,
         Err(e) => panic!("Failed to open TSN socket: {}", e),
     };
@@ -301,7 +357,10 @@ fn do_client(args: ClientArgs) {
         iov_len: rx_eth_buff.len(),
     };
     let is_tx_ts_enabled = {
-        if sock.enable_timestamps(if args.oneway { None } else { Some(&mut iov) }).is_err() {
+        if sock
+            .enable_timestamps(if args.oneway { None } else { Some(&mut iov) })
+            .is_err()
+        {
             eprintln!("Failed to enable timestamps");
             false
         } else {
@@ -445,7 +504,10 @@ fn recv_perf_packet<'a>(
                         continue;
                     }
                     match sock.get_rx_timestamp() {
-                        Ok(ts) => rx_timestamp = UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32),
+                        Ok(ts) => {
+                            rx_timestamp =
+                                UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+                        }
                         Err(_) => {
                             eprintln!("Failed to get RX timestamp");
                         }

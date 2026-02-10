@@ -8,31 +8,17 @@ use std::str;
 
 #[derive(Clone)]
 pub struct Config {
-    pub egress_qos_map: HashMap<i64, HashMap<i64, i64>>,
     pub tas: Option<TasConfig>,
     pub cbs: Option<CbsConfig>,
 }
 
 impl Config {
-    pub fn new(vlan_config: HashMap<i64, HashMap<i64, i64>>) -> Config {
+    pub fn new() -> Config {
         Config {
-            egress_qos_map: vlan_config,
             tas: None,
             cbs: None,
         }
     }
-}
-
-pub fn normalise_vlan(input: &Value) -> HashMap<i64, HashMap<i64, i64>> {
-    let mut ret_map = HashMap::new();
-    for (valnid, prio) in input.as_mapping().unwrap() {
-        let mut vlan_map = HashMap::new();
-        for (prio, pri) in prio.as_mapping().unwrap() {
-            vlan_map.insert(prio.as_i64().unwrap(), pri.as_i64().unwrap());
-        }
-        ret_map.insert(valnid.as_i64().unwrap(), vlan_map);
-    }
-    ret_map
 }
 
 pub fn read_config(config_path: &str) -> Result<HashMap<String, Config>, i64> {
@@ -49,18 +35,11 @@ pub fn read_config(config_path: &str) -> Result<HashMap<String, Config>, i64> {
     let mut ifname;
     let mut ret = HashMap::new();
     for (key, value) in config {
-        let mut info = Config::new(HashMap::new());
+        let mut info = Config::new();
         let value = value
             .as_mapping()
             .expect("config value should be a dictionary");
         ifname = key.as_str().unwrap();
-        if value.contains_key(&Value::String("egress-qos-map".to_string())) {
-            info.egress_qos_map = normalise_vlan(
-                value
-                    .get(&Value::String("egress-qos-map".to_string()))
-                    .expect("egress-qos-map should be a dictionary"),
-            );
-        }
         if value.contains_key(&Value::String("tas".to_string())) {
             match normalise_tas(
                 value

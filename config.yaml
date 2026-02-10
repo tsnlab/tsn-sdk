@@ -1,10 +1,5 @@
 nics:
   eth1:  # ifname
-    _egress-qos-map:
-      3:  # vlan id
-        # skb prio : vlan pri
-        0: 0
-        1: 1
     _tas:
       schedule:
         - time: 300us

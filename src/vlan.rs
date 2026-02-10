@@ -1,6 +1,6 @@
 use crate::{cbs::CbsConfig, config::Config, tas::TasConfig};
 use itertools::Itertools;
-use std::{collections::HashMap, io::Error};
+use std::io::Error;
 
 fn run_cmd(input: &str) -> Result<i32, String> {
     eprintln!("{}", input);
@@ -95,28 +95,10 @@ pub fn create_vlan(config: &Config, ifname: &str, vlan_id: u16) -> Result<i32, S
         return Err("Does not support both TAS and CBS".to_string());
     }
 
-    let mut cmd = String::new();
-    if let Some(qos_map) = config.egress_qos_map.get(&(vlan_id as i64)) {
-        if !qos_map.is_empty() {
-            cmd.push_str(&format!(
-                "ip link add link {} name {} type vlan id {} egress-qos-map",
-                ifname, name, vlan_id
-            ));
-            for (prio, pri) in qos_map {
-                cmd.push_str(&format!(" {}:{}", pri, prio));
-            }
-        } else {
-            cmd.push_str(&format!(
-                "ip link add link {} name {} type vlan id {}",
-                ifname, name, vlan_id
-            ));
-        }
-    } else {
-        cmd.push_str(&format!(
-            "ip link add link {} name {} type vlan id {}",
-            ifname, name, vlan_id
-        ));
-    }
+    let cmd = format!(
+        "ip link add link {} name {} type vlan id {} egress-qos-map {}:{}",
+        ifname, name, vlan_id, vlan_prio, vlan_prio
+    );
     run_cmd(&cmd)?;
     let cmd = format!("ip link set up {}", name);
     run_cmd(&cmd)?;

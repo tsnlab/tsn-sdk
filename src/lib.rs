@@ -309,7 +309,7 @@ pub fn enable_timestamps(sock: &mut TsnSocket, iov: Option<&mut libc::iovec>) ->
     if err < 0 {
         return Err(Error::last_os_error());
     }
-    
+
     // Always enable timestamps as disabling it will stop ptp4l
 
     // ioctl
@@ -338,8 +338,10 @@ pub fn enable_timestamps(sock: &mut TsnSocket, iov: Option<&mut libc::iovec>) ->
     };
     if err < 0 {
         // XXX: While ioctl failed, SW timestamp is still enabled.
-        return Err(Error::new(ErrorKind::PermissionDenied, 
-            "Hardware timestamping is not supported. Falling back to software timestamping."));
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Hardware timestamping is not supported. Falling back to software timestamping.",
+        ));
     }
 
     if Option::is_some(&iov) {
@@ -474,7 +476,10 @@ pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
         Some(msg) => msg,
         _ => {
             // TODO: It might be better to return sw timestamp
-            return Err(Error::new(ErrorKind::InvalidInput, "rx timestamp not enabled"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "rx timestamp not enabled",
+            ));
         }
     };
     let mut tend: libc::timespec = libc::timespec {
@@ -501,7 +506,8 @@ pub fn get_rx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
             unsafe {
                 libc::memcpy(
                     &mut tend as *mut _ as *mut libc::c_void,
-                    libc::CMSG_DATA(cmsg).add(size_of::<libc::timespec>() * 2) as *const libc::c_void,
+                    libc::CMSG_DATA(cmsg).add(size_of::<libc::timespec>() * 2)
+                        as *const libc::c_void,
                     mem::size_of_val(&tend),
                 );
             }

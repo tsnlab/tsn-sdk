@@ -133,7 +133,7 @@ fn main() {
         .arg(
             arg!(bitrate: -b --bitrate <bitrate>)
                 .required(false)
-                .default_value("1000000000"),  // 1 Gbps
+                .default_value("1000000000"), // 1 Gbps
         );
 
     let matched_command = Command::new("throughput")
@@ -159,16 +159,8 @@ fn main() {
                 .unwrap()
                 .parse()
                 .unwrap();
-            let warmup: usize = client_matches
-                .value_of("warmup")
-                .unwrap()
-                .parse()
-                .unwrap();
-            let bitrate: usize = client_matches
-                .value_of("bitrate")
-                .unwrap()
-                .parse()
-                .unwrap();
+            let warmup: usize = client_matches.value_of("warmup").unwrap().parse().unwrap();
+            let bitrate: usize = client_matches.value_of("bitrate").unwrap().parse().unwrap();
 
             do_client(iface, target, size, duration, warmup, bitrate)
         }
@@ -240,7 +232,11 @@ fn do_server(iface_name: String) {
                     STATS.pkt_count = 0;
                     STATS.total_bytes = 0;
                     STATS.last_id = 0;
-                    STATS.warmup_state = if STATS.warmup > 0 { WarmupState::Ready } else { WarmupState::None };
+                    STATS.warmup_state = if STATS.warmup > 0 {
+                        WarmupState::Ready
+                    } else {
+                        WarmupState::None
+                    };
                     TEST_RUNNING = true;
                 }
 
@@ -267,7 +263,9 @@ fn do_server(iface_name: String) {
             PerfOpFieldValues::Data => {
                 unsafe {
                     STATS.last_id = recv_perf_pkt.get_id();
-                    if STATS.warmup_state == WarmupState::Finished || STATS.warmup_state == WarmupState::None {
+                    if STATS.warmup_state == WarmupState::Finished
+                        || STATS.warmup_state == WarmupState::None
+                    {
                         STATS.pkt_count += 1;
                         STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
                     }
@@ -318,7 +316,14 @@ fn do_server(iface_name: String) {
     }
 }
 
-fn do_client(iface_name: String, target: String, size: usize, duration: usize, warmup: usize, bitrate: usize) {
+fn do_client(
+    iface_name: String,
+    target: String,
+    size: usize,
+    duration: usize,
+    warmup: usize,
+    bitrate: usize,
+) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
@@ -368,7 +373,7 @@ fn do_client(iface_name: String, target: String, size: usize, duration: usize, w
             Ok(_) => {
                 response_received = true;
                 break;
-            },
+            }
         }
     }
 
@@ -522,7 +527,12 @@ fn stats_worker() {
         last_time = Instant::now();
 
         let (id, bytes, total_packets, duration) = unsafe {
-            (STATS.last_id, STATS.total_bytes, STATS.pkt_count, STATS.duration)
+            (
+                STATS.last_id,
+                STATS.total_bytes,
+                STATS.pkt_count,
+                STATS.duration,
+            )
         };
         let bits = (bytes - last_bytes) * 8;
         let packets = total_packets - last_packets;

@@ -159,7 +159,10 @@ fn main() {
     match matched_command.subcommand() {
         Some(("server", sub_matches)) => {
             let server_args = ServerArgs {
-                interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
+                interface: sub_matches
+                    .get_one::<String>("interface")
+                    .unwrap()
+                    .to_string(),
                 vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
                 vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),
             };
@@ -168,7 +171,10 @@ fn main() {
         }
         Some(("client", sub_matches)) => {
             let client_args = ClientArgs {
-                interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
+                interface: sub_matches
+                    .get_one::<String>("interface")
+                    .unwrap()
+                    .to_string(),
                 target: *sub_matches.get_one("target").unwrap(),
                 vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
                 vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),

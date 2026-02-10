@@ -1,5 +1,6 @@
 nics:
   eth1:  # ifname
+    # qos-map
     _tas:
       schedule:
         - time: 300us

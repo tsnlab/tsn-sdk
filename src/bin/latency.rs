@@ -83,29 +83,13 @@ fn main() {
                 .required(true),
         )
         .arg(
-            arg!(--vlan-id <id> "VLAN ID (1-4095)")
+            arg!(--vlan_id <id> "VLAN ID (1-4095)")
                 .value_parser(value_parser!(u16))
-                .validator(|s| -> Result<(), String> {
-                    let v: u16 = s.parse().map_err(|_| "VLAN ID must be a number".to_string())?;
-                    if (1..=4095).contains(&v) {
-                        Ok(())
-                    } else {
-                        Err("VLAN ID must be between 1 and 4095".to_string())
-                    }
-                })
                 .required(true),
         )
         .arg(
-            arg!(--vlan-prio <prio> "VLAN priority (PCP, 0-7)")
+            arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
                 .value_parser(value_parser!(u32))
-                .validator(|s| -> Result<(), String> {
-                    let v: u32 = s.parse().map_err(|_| "VLAN priority must be a number".to_string())?;
-                    if v <= 7 {
-                        Ok(())
-                    } else {
-                        Err("VLAN priority must be between 0 and 7".to_string())
-                    }
-                })
                 .required(true),
         );
 
@@ -151,29 +135,13 @@ fn main() {
             "TX packets would go on every X.000000000s. Interval and Jitter will be ignored.",
         ))
         .arg(
-            arg!(--vlan-id <id> "VLAN ID (1-4095)")
+            arg!(--vlan_id <id> "VLAN ID (1-4095)")
                 .value_parser(value_parser!(u16))
-                .validator(|s| -> Result<(), String> {
-                    let v: u16 = s.parse().map_err(|_| "VLAN ID must be a number".to_string())?;
-                    if (1..=4095).contains(&v) {
-                        Ok(())
-                    } else {
-                        Err("VLAN ID must be between 1 and 4095".to_string())
-                    }
-                })
                 .required(true),
         )
         .arg(
-            arg!(--vlan-prio <prio> "VLAN priority (PCP, 0-7)")
+            arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
                 .value_parser(value_parser!(u32))
-                .validator(|s| -> Result<(), String> {
-                    let v: u32 = s.parse().map_err(|_| "VLAN priority must be a number".to_string())?;
-                    if v <= 7 {
-                        Ok(())
-                    } else {
-                        Err("VLAN priority must be between 0 and 7".to_string())
-                    }
-                })
                 .required(true),
         );
 
@@ -190,8 +158,8 @@ fn main() {
         Some(("server", sub_matches)) => {
             let server_args = ServerArgs {
                 interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
-                vlan_id: *sub_matches.get_one::<u16>("vlan-id").unwrap(),
-                vlan_pri: *sub_matches.get_one::<u32>("vlan-prio").unwrap(),
+                vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),
             };
 
             do_server(server_args)
@@ -200,8 +168,8 @@ fn main() {
             let client_args = ClientArgs {
                 interface: sub_matches.get_one::<String>("interface").unwrap().to_string(),
                 target: *sub_matches.get_one("target").unwrap(),
-                vlan_id: *sub_matches.get_one::<u16>("vlan-id").unwrap(),
-                vlan_pri: *sub_matches.get_one::<u32>("vlan-prio").unwrap(),
+                vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),
                 size: *sub_matches.get_one("size").unwrap(),
                 count: *sub_matches.get_one("count").unwrap(),
                 interval: *sub_matches.get_one("interval").unwrap(),

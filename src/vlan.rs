@@ -122,8 +122,6 @@ pub fn delete_vlan(ifname: &str, vlanid: u16) -> Result<i32, String> {
     run_cmd(&cmd)?;
     let cmd = format!("tc qdisc delete dev {} root", ifname);
     run_cmd(&cmd)?;
-    let cmd = format!("rm /dev/shm/libtsn_vlan_{}", name);
-    run_cmd(&cmd)?;
     Ok(0)
 }
 

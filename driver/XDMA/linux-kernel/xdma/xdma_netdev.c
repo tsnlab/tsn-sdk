@@ -444,10 +444,13 @@ int xdma_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr, void 
 
 static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         sysclock_t tx_tstamp;
+        struct xdma_pci_dev *xpdev;
+        struct ptp_device_data *ptp_data;
         struct skb_shared_hwtstamps shhwtstamps;
         struct xdma_private_common* common = container_of(work - tstamp_id, struct xdma_private_common, tx_work[0]);
         struct sk_buff* skb = common->tx_work_skb[tstamp_id];
         sysclock_t now = alinx_get_sys_clock_by_xdev(common->xdev);
+        unsigned long ptp_flag;
 
         if (tstamp_id >= TSN_TIMESTAMP_ID_MAX) {
                 pr_err("Invalid timestamp ID\n");
@@ -486,8 +489,17 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 goto retry;
         }
 
+        xpdev = dev_get_drvdata(&common->xdev->pdev->dev);
+        ptp_data = xpdev->ptp;
+        if (!ptp_data) {
+                pr_err("Invalid ptp_data\n");
+                goto return_error;
+        }
+
         common->tstamp_retry[tstamp_id] = 0;
+        spin_lock_irqsave(&ptp_data->lock, ptp_flag);
         shhwtstamps.hwtstamp = ns_to_ktime(alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp));
+        spin_unlock_irqrestore(&ptp_data->lock, ptp_flag);
         common->last_tx_tstamp[tstamp_id] = tx_tstamp;
 
         common->tx_work_skb[tstamp_id] = NULL;

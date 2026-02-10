@@ -1464,7 +1464,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	u32 mask;
 	u16 q;
 	int skb_len;
-	unsigned long flag;
+	unsigned long flag, ptp_flag;
 	struct interrupt_regs *irq_regs;
 	struct net_device *ndev;
 	struct sk_buff *skb;
@@ -1474,6 +1474,8 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	struct xdma_private_common *common;
 	struct xdma_result *result;
 	struct rx_buffer *rx_buffer;
+	struct xdma_pci_dev *xpdev;
+	struct ptp_device_data *ptp_data;
 
 	dbg_irq("(irq=%d, dev 0x%p) <<<< ISR.\n", irq, dev_id);
 	if (!dev_id) {
@@ -1548,7 +1550,19 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		       common->rx_buffer + RX_METADATA_SIZE,
 		       skb_len);
 		if (filter_rx_timestamp(common, skb)) {
+			xpdev = dev_get_drvdata(&xdev->pdev->dev);
+			ptp_data = xpdev->ptp;
+			if (!ptp_data) {
+				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
+				iowrite32(DMA_ENGINE_START, &engine->regs->control);
+				spin_unlock_irqrestore(&common->rx_lock, flag);
+				pr_err("Invalid ptp_data\n");
+				return IRQ_NONE;
+			}
+			spin_lock_irqsave(&ptp_data->lock, ptp_flag);
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
+			spin_unlock_irqrestore(&ptp_data->lock, ptp_flag);
 		}
 
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */

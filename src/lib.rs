@@ -339,7 +339,8 @@ pub fn enable_timestamps(sock: &mut TsnSocket, iov: Option<&mut libc::iovec>) ->
     if err < 0 {
         // XXX: While ioctl failed, SW timestamp is still enabled.
         eprintln!("ioctl SIOCSHWTSTAMP failed: {}", Error::last_os_error());
-        eprintln!("But SW timestamp by kernel is still enabled.")
+        eprintln!("But SW timestamp by kernel is still enabled.");
+        return Err(Error::last_os_error());
     }
 
     if Option::is_some(&iov) {

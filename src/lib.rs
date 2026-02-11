@@ -130,8 +130,8 @@ pub fn sock_open(
 ) -> Result<TsnSocket, String> {
     let name = match create_vlan(ifname, vlanid) {
         Ok(v) => v,
-        Err(_) => {
-            return Err(format!("Create vlan fails {}", Error::last_os_error()));
+        Err(err_msg) => {
+            return Err(format!("Create vlan fails: {}", err_msg));
         }
     };
     let sock;
@@ -652,7 +652,7 @@ fn get_config(ifname: &str) -> Result<config::Config, String> {
     let config = configs.get(ifname);
     match config {
         Some(v) => Ok(v.clone()),
-        None => Err(format!("No config for {}", ifname)),
+        None => Err(format!("{} not found in {}", ifname, config_path)),
     }
 }
 

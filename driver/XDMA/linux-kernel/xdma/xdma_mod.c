@@ -409,6 +409,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&common->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&common->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&common->tx_work[4], xdma_tx_work4);
+	INIT_WORK(&common->tx_queue_work, xdma_tx_queue_work);
 	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
 	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 
@@ -481,6 +482,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		}
 	}
 	channel_interrupts_enable(xdev, ~0);
+	common->is_running = true;
+	schedule_work(&common->tx_queue_work);
 	//netif_stop_queue(ndev);
 	return 0;
 
@@ -548,6 +551,8 @@ static void remove_one(struct pci_dev *pdev)
 	common = priv->common;
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
+	common->is_running = false;
+	cancel_work_sync(&common->tx_queue_work);
 	cancel_delayed_work(&common->rx_poll_work);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->tx_desc, common->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), common->rx_desc, common->rx_bus_addr);

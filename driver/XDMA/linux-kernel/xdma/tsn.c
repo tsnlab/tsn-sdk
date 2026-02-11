@@ -85,6 +85,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct tsn_config* tsn_config = &xdev->tsn_config;
 	struct xdma_private* priv = netdev_priv(xdev->ndev[0]);  // TODO: TSN config per port
 	struct xdma_private_common* common = priv->common;
+	bool ret = true;
 
 	vlan_prio = tsn_get_vlan_prio(tsn_config, skb);
 	tc_id = tsn_get_mqprio_tc(priv->ndev, vlan_prio);
@@ -115,7 +116,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 
 		if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
-			return false;
+			ret = false; // Don't drop the frame, wait for the queue to be available
 		}
 		timestamps.from = from;
 		timestamps.to = TSN_ALWAYS_OPEN(from);
@@ -129,12 +130,12 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 		if (consider_delay) {
 			if (!is_buffer_available(xdev, TSN_QUEUE_SIZE_PAD)) {
-				return false;
+				ret = false;
 			}
 		} else {
 			// Best effort
 			if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
-				return false;
+				ret = false;
 			}
 			from = max(from, tsn_config->total_available_at);
 		}
@@ -172,7 +173,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 
 	free_at = max(timestamps.to + duration_ns, tsn_config->total_available_at);
 
-	return true;
+	return ret;
 }
 
 void tsn_init_configs(struct pci_dev* pdev) {

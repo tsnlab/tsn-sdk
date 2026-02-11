@@ -86,6 +86,8 @@ typedef uint32_t u32
 #define TSN_PRIO_COUNT 8
 #define MAX_QBV_SLOTS 20
 
+#define TX_SKBUFF_QUEUE_CAPACITY 1024
+
 /* FRER (802.1CB) configuration limits */
 #define MAX_FRER_STREAMS 64
 #define FRER_HASH_BITS 6
@@ -179,6 +181,18 @@ struct tsn_config {
 
 	/* FRER (802.1CB) configuration */
 	struct frer_config *frer;
+};
+
+struct tx_queue_item {
+        struct sk_buff *skb;
+        dma_addr_t dma_addr;
+        int port_id;
+};
+
+struct xdma_tx_queue {
+        struct tx_queue_item queue[TX_SKBUFF_QUEUE_CAPACITY];
+        int head;
+        int tail;
 };
 
 u32 read32(void * addr);

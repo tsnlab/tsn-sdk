@@ -1400,6 +1400,83 @@ static bool filter_rx_timestamp(struct xdma_private_common* common, struct sk_bu
 	}
 }
 
+bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue) {
+	return queue->head != queue->tail;
+}
+
+bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue) {
+	return queue->head == (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+}
+
+struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue) {
+	struct tx_queue_item *item = &queue->queue[queue->head];
+	queue->head = (queue->head + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+	return item;
+}
+
+void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr, int port_id) {
+	struct tx_queue_item *tx_queue_item = &queue->queue[queue->tail];
+	tx_queue_item->skb = skb;
+	tx_queue_item->dma_addr = dma_addr;
+	tx_queue_item->port_id = port_id;
+	queue->tail = (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+}
+
+void xdma_tx_queue_work(struct work_struct *work) {
+	struct xdma_private_common* common = container_of(work, struct xdma_private_common, tx_queue_work);
+	struct xdma_dev *xdev = common->xdev;
+	struct tx_queue_item *tx_queue_item = NULL;
+	unsigned long flags;
+	u32 w;
+
+	if (!common->is_running) {
+		return;
+	}
+
+	spin_lock_irqsave(&common->tx_lock, flags);
+	if (common->tx_skb != NULL) {
+		goto retry;
+	}
+
+	spin_lock_irqsave(&common->tx_queue_lock, flags);
+
+	if (xdma_tx_queue_has_data(&common->gptp_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&common->gptp_tx_queue);
+	}
+
+	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&common->vlan_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&common->vlan_tx_queue);
+	}
+
+	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&common->be_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&common->be_tx_queue);
+	}
+
+	spin_unlock_irqrestore(&common->tx_queue_lock, flags);
+
+	if (tx_queue_item) {
+		xdma_swap_ports(xdev, tx_queue_item->port_id, common->rx_port);
+
+		common->tx_dma_addr = tx_queue_item->dma_addr;
+		common->tx_skb = tx_queue_item->skb;
+		tx_desc_set(common->tx_desc, tx_queue_item->dma_addr, tx_queue_item->skb->len);
+
+		w = cpu_to_le32(PCI_DMA_L(common->tx_bus_addr));
+		iowrite32(w, xdev->bar[1] + DESC_REG_LO);
+
+		w = cpu_to_le32(PCI_DMA_H(common->tx_bus_addr));
+		iowrite32(w, xdev->bar[1] + DESC_REG_HI);
+		iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
+
+		iowrite32(DMA_ENGINE_START, &common->tx_engine->regs->control);
+	}
+
+retry:
+	spin_unlock_irqrestore(&common->tx_lock, flags);
+
+	schedule_work(&common->tx_queue_work);
+}
+
 /*
  * xdma_rx_poll_work - Poll work for multi-port RX
  *
@@ -1462,7 +1539,6 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 {
 	u32 ch_irq;
 	u32 mask;
-	u16 q;
 	int skb_len;
 	unsigned long flag, ptp_flag;
 	struct interrupt_regs *irq_regs;
@@ -1613,13 +1689,14 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		dbg_info("xdma_isr h2c");
 		engine = &xdev->engine_h2c[0];
 
+		spin_lock_irqsave(&common->tx_lock, flag);
+
 		engine_status_read(engine, 1, 0);
 		if (common->tx_skb == NULL) {
 			pr_err("Invalid h2c interrupt\n");
+			spin_unlock_irqrestore(&common->tx_lock, flag);
 			return IRQ_NONE;
 		}
-
-		q = skb_get_queue_mapping(common->tx_skb);
 
 		/* Free last resource */
 		dma_unmap_single(&xdev->pdev->dev, common->tx_dma_addr, common->tx_skb->len, DMA_TO_DEVICE);
@@ -1627,6 +1704,8 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		common->tx_skb = NULL;
 
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+		spin_unlock_irqrestore(&common->tx_lock, flag);
+		/* Network queue might have been stopped due to busy HW queue */
 		xdma_start_all_queues(xdev);
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 	}

@@ -25,7 +25,7 @@ static size_t workaround_packet_size(size_t size) {
         return size;
 }
 
-static void tx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
+void tx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
 {
         u32 control_field;
         u32 control;
@@ -125,18 +125,18 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         struct xdma_private *priv = netdev_priv(ndev);
         struct xdma_private_common *common = priv->common;
         struct xdma_dev *xdev = common->xdev;
-        u32 w;
         sysclock_t sys_count, sys_count_upper, sys_count_lower;
         timestamp_t now;
         u16 frame_length;
         dma_addr_t dma_addr;
         struct tx_buffer* tx_buffer;
         struct tx_metadata* tx_metadata;
+        struct xdma_tx_queue *queue;
         u32 to_value;
+        unsigned long flags;
 
 
         /* Check desc count */
-        netif_tx_stop_all_queues(ndev);
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
         skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
@@ -146,7 +146,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         if (skb_padto(skb, skb->len)) {
                 pr_err("skb_padto failed\n");
-                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -156,7 +155,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
 #endif
-                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -166,7 +164,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("pskb_expand_head failed\n");
 #endif
-                xdma_start_all_queues(xdev);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -190,8 +187,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
 		pr_warn("tsn_fill_metadata failed\n");
 #endif
-		xdma_start_all_queues(xdev);
-		return NETDEV_TX_BUSY;
+                /* HW Queue is almost full, but there is still some room left */
+                /* Next frames have to wait for the queue to be available */
+                xdma_stop_all_queues(xdev);
 	}
 
 	/* FRER (802.1CB): Insert R-TAG with auto stream registration */
@@ -213,7 +211,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 			/* Use TX-aware R-TAG insertion */
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
-				xdma_start_all_queues(xdev);
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;
 			}
@@ -229,10 +226,32 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 tx_metadata->frame_length, tx_metadata->fail_policy);
         dump_buffer((unsigned char*)tx_metadata, (int)(sizeof(struct tx_metadata) + skb->len));
 
+        spin_lock_irqsave(&common->tx_queue_lock, flags);
+
+        switch (tx_metadata->from.priority) {
+                case TSN_PRIO_GPTP:
+                        queue = &common->gptp_tx_queue;
+                        break;
+                case TSN_PRIO_VLAN:
+                        queue = &common->vlan_tx_queue;
+                        break;
+                default:
+                        queue = &common->be_tx_queue;
+                        break;
+        }
+
+        if (xdma_tx_queue_is_full(queue)) {
+#ifdef __LIBXDMA_DEBUG__
+                pr_err("TX queue is full\n");
+#endif
+                spin_unlock_irqrestore(&common->tx_queue_lock, flags);
+                return NETDEV_TX_BUSY;
+        }
+
         dma_addr = dma_map_single(&xdev->pdev->dev, skb->data, skb->len, DMA_TO_DEVICE);
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
-                xdma_start_all_queues(xdev);
+                spin_unlock_irqrestore(&common->tx_queue_lock, flags);
                 return NETDEV_TX_BUSY;
         }
 
@@ -268,21 +287,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 // TODO: track the number of skipped packets for ethtool stats
         }
 
-        xdma_swap_ports(xdev, priv->physical_port_id, common->rx_port);
+        xdma_tx_queue_enqueue(queue, skb, dma_addr, priv->physical_port_id);
+        spin_unlock_irqrestore(&common->tx_queue_lock, flags);
 
-        /* netif_wake_queue() will be called in xdma_isr() */
-        common->tx_dma_addr = dma_addr;
-        common->tx_skb = skb;
-        tx_desc_set(common->tx_desc, dma_addr, skb->len);
-
-        w = cpu_to_le32(PCI_DMA_L(common->tx_bus_addr));
-        iowrite32(w, xdev->bar[1] + DESC_REG_LO);
-
-        w = cpu_to_le32(PCI_DMA_H(common->tx_bus_addr));
-        iowrite32(w, xdev->bar[1] + DESC_REG_HI);
-        iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
-
-        iowrite32(DMA_ENGINE_START, &common->tx_engine->regs->control);
         return NETDEV_TX_OK;
 }
 

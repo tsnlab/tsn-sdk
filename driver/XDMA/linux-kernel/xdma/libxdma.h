@@ -714,4 +714,10 @@ void xdma_rx_poll_work(struct work_struct *work);
 void xdma_stop_all_queues(struct xdma_dev *xdev);
 void xdma_start_all_queues(struct xdma_dev *xdev);
 void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port);
+
+bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue);
+bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue);
+struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue);
+void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr, int port_id);
+void xdma_tx_queue_work(struct work_struct *work);
 #endif /* XDMA_LIB_H */

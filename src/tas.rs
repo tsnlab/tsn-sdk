@@ -58,7 +58,7 @@ pub fn normalise_tas(config: &Value) -> Result<TasConfig, String> {
         {
             let prio = prio.as_i64().expect("prio should be an integer");
             v.push(prio.clone());
-            if prio > 0 && !tc_map.contains_key(&prio) {
+            if prio >= 0 && !tc_map.contains_key(&prio) {
                 tc_map.insert(prio.clone(), tc_map.len() as i64);
             }
         }

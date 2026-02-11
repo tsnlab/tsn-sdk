@@ -83,13 +83,13 @@ fn main() {
                 .required(true),
         )
         .arg(
-            arg!(--vlan_id <id> "VLAN ID (1-4095)")
-                .value_parser(value_parser!(u16))
+            arg!(--vlan_id <id> "VLAN ID (1-4094)")
+                .value_parser(value_parser!(u16).range(1..=4094))
                 .required(true),
         )
         .arg(
             arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
-                .value_parser(value_parser!(u32))
+                .value_parser(value_parser!(u32).range(0..=7))
                 .default_value("0")
                 .required(false),
         );
@@ -136,13 +136,13 @@ fn main() {
             "TX packets would go on every X.000000000s. Interval and Jitter will be ignored.",
         ))
         .arg(
-            arg!(--vlan_id <id> "VLAN ID (1-4095)")
-                .value_parser(value_parser!(u16))
+            arg!(--vlan_id <id> "VLAN ID (1-4094)")
+                .value_parser(value_parser!(u16).range(1..=4094))
                 .required(true),
         )
         .arg(
             arg!(--vlan_prio <prio> "VLAN priority (PCP, 0-7)")
-                .value_parser(value_parser!(u32))
+                .value_parser(value_parser!(u32).range(0..=7))
                 .default_value("0")
                 .required(false),
         );

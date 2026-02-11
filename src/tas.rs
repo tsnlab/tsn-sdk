@@ -92,7 +92,7 @@ pub fn normalise_tas(config: &Value) -> Result<TasConfig, String> {
         for pri in &sch.prio {
             sum += 1 << tc_map[pri];
         }
-        sched_entries.push(format!("S {} {}", sum, sch.time));
+        sched_entries.push(format!("S 0x{:x} {}", sum, sch.time));
     }
     let txtime_delay = match config.get(&Value::String("txtime_delay".to_string())) {
         Some(val) => to_ns(val).unwrap_or(0),

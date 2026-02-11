@@ -87,12 +87,7 @@ pub fn setup_cbs(ifname: &str, config: &CbsConfig) -> Result<i32, String> {
     Ok(0)
 }
 
-pub fn create_vlan(
-    config: &Config,
-    ifname: &str,
-    vlan_id: u16,
-    vlan_prio: u32,
-) -> Result<i32, String> {
+pub fn create_vlan(config: &Config, ifname: &str, vlan_id: u16) -> Result<i32, String> {
     let name = get_vlan_name(ifname, vlan_id);
 
     if config.tas.is_some() && config.cbs.is_some() {
@@ -100,9 +95,11 @@ pub fn create_vlan(
         return Err("Does not support both TAS and CBS".to_string());
     }
 
+    // 0-7: identity map, 8-15: map to 0 (not used in VLAN PCP)
+    let egress_qos_map = "0:0 1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0";
     let cmd = format!(
-        "ip link add link {} name {} type vlan id {} egress-qos-map {}:{}",
-        ifname, name, vlan_id, vlan_prio, vlan_prio
+        "ip link add link {} name {} type vlan id {} egress-qos-map {}",
+        ifname, name, vlan_id, egress_qos_map
     );
     run_cmd(&cmd)?;
     let cmd = format!("ip link set up {}", name);

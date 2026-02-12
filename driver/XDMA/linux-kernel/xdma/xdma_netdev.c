@@ -287,7 +287,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 // TODO: track the number of skipped packets for ethtool stats
         }
 
-        xdma_tx_queue_enqueue(queue, skb, dma_addr, priv->physical_port_id);
+        xdma_tx_queue_enqueue(queue, skb, dma_addr, priv->port_id);
         spin_unlock_irqrestore(&common->tx_queue_lock, flags);
 
         return NETDEV_TX_OK;

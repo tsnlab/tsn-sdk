@@ -1455,7 +1455,9 @@ void xdma_tx_queue_work(struct work_struct *work) {
 	spin_unlock_irqrestore(&common->tx_queue_lock, flags);
 
 	if (tx_queue_item) {
-		xdma_swap_ports(xdev, tx_queue_item->port_id, common->rx_port);
+		if (tx_queue_item->port_id != XDMA_FRER_PORT_ID) {
+			xdma_swap_ports(xdev, tx_queue_item->port_id, common->rx_port);
+		}
 
 		common->tx_dma_addr = tx_queue_item->dma_addr;
 		common->tx_skb = tx_queue_item->skb;

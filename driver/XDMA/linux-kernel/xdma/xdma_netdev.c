@@ -506,6 +506,7 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         common->tstamp_retry[tstamp_id] = 0;
         spin_lock_irqsave(&ptp_data->lock, ptp_flag);
         shhwtstamps.hwtstamp = ns_to_ktime(alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp));
+        // pr_warn("%s 0x%08llx %llu %u\n", skb->dev->name, tx_tstamp, alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp), common->xdev->tx_timestamp_adjustment[tstamp_id]);
         spin_unlock_irqrestore(&ptp_data->lock, ptp_flag);
         common->last_tx_tstamp[tstamp_id] = tx_tstamp;
 

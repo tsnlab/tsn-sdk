@@ -396,6 +396,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	spin_lock_init(&common->tx_lock);
 	spin_lock_init(&common->rx_lock);
+	spin_lock_init(&xdev->sysclock_lock);
 
 	common->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &common->rx_dma_addr, GFP_KERNEL);
 	if (!common->rx_buffer) {
@@ -460,6 +461,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		priv[i]->port_id = i;
 		priv[i]->physical_port_id = i >= XDMA_NUM_PORTS ? 0 : i;
 		priv[i]->common = common;
+		// priv[i]->last_rx_timestamp = 0;  // for logging
 
 		switch (i) {
 			case XDMA_FRER_PORT_ID:

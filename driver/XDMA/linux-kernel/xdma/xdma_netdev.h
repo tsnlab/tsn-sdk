@@ -99,6 +99,7 @@ struct xdma_private {
         int port_id;
         int physical_port_id; /* 0 or 1 */
         uint32_t port_flag;
+        // uint64_t last_rx_timestamp;
 };
 
 #define _DEFAULT_FROM_MARGIN_ (500)

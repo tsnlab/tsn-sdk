@@ -44,6 +44,30 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
+#define SYSCLOCK_ERROR_DETECTION_THRESHOLD 0x10000000UL
+
+sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
+        if ((current_sysclock & 0xFFFFFFFFUL) + SYSCLOCK_ERROR_DETECTION_THRESHOLD < (last_sysclock & 0xFFFFFFFFUL)) {
+                if ((current_sysclock >> 32) == (last_sysclock >> 32)) {
+                        /* HI is not updated */
+                        (*adjustment)++;
+                } else {
+                        *adjustment -= (((current_sysclock >> 32) - (last_sysclock >> 32)) - 1);
+                }
+        }
+        return current_sysclock + ((sysclock_t)(*adjustment) << 32);
+}
+
+sysclock_t alinx_get_adjusted_sysclock(struct xdma_dev *xdev, void* hi_addr, void* lo_addr, sysclock_t* last_sysclock, uint8_t* adjustment) {
+        unsigned long flags;
+        spin_lock_irqsave(&xdev->sysclock_lock, flags);
+        sysclock_t current_sysclock = read64(hi_addr, lo_addr);
+        sysclock_t adjusted_sysclock = alinx_adjust_sysclock(current_sysclock, *last_sysclock, adjustment);
+        *last_sysclock = current_sysclock;
+        spin_unlock_irqrestore(&xdev->sysclock_lock, flags);
+        return adjusted_sysclock;
+}
+
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time) {
         write32((u32)(time >> 32), xdev->bar[0] + REG_NEXT_PULSE_AT_HI);
         write32((u32)time, xdev->bar[0] + REG_NEXT_PULSE_AT_LO);
@@ -55,8 +79,9 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 }
 
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
-        return read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
-                      xdev->bar[0] + REG_SYS_CLOCK_LO);
+        return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_SYS_CLOCK_HI, xdev->bar[0] + REG_SYS_CLOCK_LO, &xdev->last_sysclock, &xdev->sysclock_adjustment);
+        // return read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
+        //               xdev->bar[0] + REG_SYS_CLOCK_LO);
 }
 
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
@@ -88,17 +113,21 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
-                return read64(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH,
-                              xdev->bar[0] + REG_TX_TIMESTAMP1_LOW);
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW, &xdev->last_tx_timestamp[0], &xdev->tx_timestamp_adjustment[0]);
+                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH,
+                //               xdev->bar[0] + REG_TX_TIMESTAMP1_LOW);
         case 2:
-                return read64(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH,
-                              xdev->bar[0] + REG_TX_TIMESTAMP2_LOW);
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW, &xdev->last_tx_timestamp[1], &xdev->tx_timestamp_adjustment[1]);
+                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH,
+                //               xdev->bar[0] + REG_TX_TIMESTAMP2_LOW);
         case 3:
-                return read64(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH,
-                              xdev->bar[0] + REG_TX_TIMESTAMP3_LOW);
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW, &xdev->last_tx_timestamp[2], &xdev->tx_timestamp_adjustment[2]);
+                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH,
+                //               xdev->bar[0] + REG_TX_TIMESTAMP3_LOW);
         case 4:
-                return read64(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH,
-                              xdev->bar[0] + REG_TX_TIMESTAMP4_LOW);
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW, &xdev->last_tx_timestamp[3], &xdev->tx_timestamp_adjustment[3]);
+                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH,
+                //               xdev->bar[0] + REG_TX_TIMESTAMP4_LOW);
         default:
                 return 0;
         }

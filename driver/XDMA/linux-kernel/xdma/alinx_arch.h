@@ -201,7 +201,7 @@ u32 read32(void * addr);
 void write32(u32 val, void * addr);
 u64 read64(void *addr_high, void *addr_low);
 
-sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment);
+sysclock_t alinx_adjust_sysclock(struct xdma_dev *xdev, sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment);
 sysclock_t alinx_get_adjusted_sysclock(struct xdma_dev *xdev, void* hi_addr, void* lo_addr, sysclock_t* last_sysclock, uint8_t* adjustment);
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time);
 void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time);

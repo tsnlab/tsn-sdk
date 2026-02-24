@@ -44,27 +44,27 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
-#define SYSCLOCK_ERROR_DETECTION_THRESHOLD 0x10000000UL
-
-sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
-        if ((current_sysclock & 0xFFFFFFFFUL) + SYSCLOCK_ERROR_DETECTION_THRESHOLD < (last_sysclock & 0xFFFFFFFFUL)) {
-                if ((current_sysclock >> 32) == (last_sysclock >> 32)) {
-                        /* HI is not updated */
-                        (*adjustment)++;
-                } else {
-                        *adjustment -= (((current_sysclock >> 32) - (last_sysclock >> 32)) - 1);
-                }
+sysclock_t alinx_adjust_sysclock(struct xdma_dev *xdev, sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
+        unsigned long flags;
+        if (last_sysclock == 0) {
+                return current_sysclock;
         }
+        spin_lock_irqsave(&xdev->sysclock_lock, flags);
+        if (current_sysclock < last_sysclock) {
+                pr_err("Sysclock error detected: current_sysclock=0x%08llx, last_sysclock=0x%08llx\n", current_sysclock, last_sysclock);
+                (*adjustment) += 1;
+        } else if ((*adjustment > 0) && ((current_sysclock >> 32) > (last_sysclock >> 32))) {
+                pr_err("Updating adjustment: %u %llu %llu\n", *adjustment, (current_sysclock >> 32), (last_sysclock >> 32));
+                (*adjustment) -= ((current_sysclock >> 32) - (last_sysclock >> 32)) - 1;
+        }
+        spin_unlock_irqrestore(&xdev->sysclock_lock, flags);
         return current_sysclock + ((sysclock_t)(*adjustment) << 32);
 }
 
 sysclock_t alinx_get_adjusted_sysclock(struct xdma_dev *xdev, void* hi_addr, void* lo_addr, sysclock_t* last_sysclock, uint8_t* adjustment) {
-        unsigned long flags;
-        spin_lock_irqsave(&xdev->sysclock_lock, flags);
         sysclock_t current_sysclock = read64(hi_addr, lo_addr);
-        sysclock_t adjusted_sysclock = alinx_adjust_sysclock(current_sysclock, *last_sysclock, adjustment);
+        sysclock_t adjusted_sysclock = alinx_adjust_sysclock(xdev, current_sysclock, *last_sysclock, adjustment);
         *last_sysclock = current_sysclock;
-        spin_unlock_irqrestore(&xdev->sysclock_lock, flags);
         return adjusted_sysclock;
 }
 

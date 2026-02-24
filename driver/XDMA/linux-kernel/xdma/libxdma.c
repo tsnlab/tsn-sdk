@@ -72,6 +72,11 @@ module_param(rx_poll_mode, uint, 0644);
 MODULE_PARM_DESC(rx_poll_mode,
 		 "Use polling for RX (both ports), default is 1 (enabled)");
 
+unsigned int rtag_duplicate_mac = 1;
+module_param(rtag_duplicate_mac, uint, 0644);
+MODULE_PARM_DESC(rtag_duplicate_mac,
+		 "The R-Tag interface uses the same MAC address as the first port, default is 1 (enabled)");
+
 #define XDMA_PERF_NUM_DESC 128
 
 /* Kernel version adaptative code */

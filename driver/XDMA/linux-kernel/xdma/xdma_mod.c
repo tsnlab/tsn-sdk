@@ -92,6 +92,7 @@ static uint64_t hash(unsigned long hostid, unsigned long num) {
 	return hash;
 }
 
+extern unsigned int rtag_duplicate_mac;
 static void get_mac_address(char* mac_addr, struct xdma_dev *xdev, int port_id) {
 	int i;
 	uint64_t hashed_num;
@@ -109,6 +110,11 @@ static void get_mac_address(char* mac_addr, struct xdma_dev *xdev, int port_id) 
 	for (i = 0; i < ETH_ALEN; i++) {
 		mac_addr[i] = (hashed_num >> (i * 8)) & 0xFF;
 	}
+
+	if (port_id >= XDMA_NUM_PORTS && rtag_duplicate_mac) {
+		port_id = 0;
+	}
+
 	mac_addr[5] += port_id;
 
 	// Adjust U/L, I/G bits

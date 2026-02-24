@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub struct TasConfig {
     pub txtime_delay: i64,
-    #[allow(dead_code)]  // Leave this field since it might be used for debug
+    #[allow(dead_code)] // Leave this field since it might be used for debug
     pub schedule: Vec<TasSchedule>,
     pub tc_map: HashMap<i64, i64>,
     pub num_tc: i64,
@@ -58,7 +58,7 @@ pub fn normalise_tas(config: &Value) -> Result<TasConfig, String> {
         {
             let prio = prio.as_i64().expect("prio should be an integer");
             v.push(prio.clone());
-            if prio > 0 && !tc_map.contains_key(&prio) {
+            if prio >= 0 && !tc_map.contains_key(&prio) {
                 tc_map.insert(prio.clone(), tc_map.len() as i64);
             }
         }
@@ -92,7 +92,7 @@ pub fn normalise_tas(config: &Value) -> Result<TasConfig, String> {
         for pri in &sch.prio {
             sum += 1 << tc_map[pri];
         }
-        sched_entries.push(format!("S {} {}", sum, sch.time));
+        sched_entries.push(format!("S 0x{:x} {}", sum, sch.time));
     }
     let txtime_delay = match config.get(&Value::String("txtime_delay".to_string())) {
         Some(val) => to_ns(val).unwrap_or(0),

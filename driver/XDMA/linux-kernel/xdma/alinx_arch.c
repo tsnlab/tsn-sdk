@@ -44,13 +44,14 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
+#define SYSCLOCK_ADJUSTMENT_THRESHOLD (0x80000000ULL)
 sysclock_t alinx_adjust_sysclock(struct xdma_dev *xdev, sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
         unsigned long flags;
         if (last_sysclock == 0) {
                 return current_sysclock;
         }
         spin_lock_irqsave(&xdev->sysclock_lock, flags);
-        if (current_sysclock < last_sysclock) {
+        if (current_sysclock + SYSCLOCK_ADJUSTMENT_THRESHOLD < last_sysclock) {
                 pr_err("Sysclock error detected: current_sysclock=0x%08llx, last_sysclock=0x%08llx\n", current_sysclock, last_sysclock);
                 (*adjustment) += 1;
         } else if ((*adjustment > 0) && ((current_sysclock >> 32) > (last_sysclock >> 32))) {

@@ -163,8 +163,8 @@ fn main() {
                     .get_one::<String>("interface")
                     .unwrap()
                     .to_string(),
-                vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
-                vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),
+                vlan_id: *sub_matches.get_one::<u16>("vlanid").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("pcp").unwrap(),
             };
 
             do_server(server_args)
@@ -176,8 +176,8 @@ fn main() {
                     .unwrap()
                     .to_string(),
                 target: *sub_matches.get_one("target").unwrap(),
-                vlan_id: *sub_matches.get_one::<u16>("vlan_id").unwrap(),
-                vlan_pri: *sub_matches.get_one::<u32>("vlan_prio").unwrap(),
+                vlan_id: *sub_matches.get_one::<u16>("vlanid").unwrap(),
+                vlan_pri: *sub_matches.get_one::<u32>("pcp").unwrap(),
                 size: *sub_matches.get_one("size").unwrap(),
                 count: *sub_matches.get_one("count").unwrap(),
                 interval: *sub_matches.get_one("interval").unwrap(),

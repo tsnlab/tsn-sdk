@@ -304,8 +304,11 @@ struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
 	struct frer_stream *stream;
 	u32 hash;
 
-	if (frer->stream_count >= MAX_FRER_STREAMS)
+	if (frer->stream_count >= MAX_FRER_STREAMS) {
+		pr_warn_ratelimited("FRER: Stream table full (%d/%d), cannot auto-register\n",
+				    frer->stream_count, MAX_FRER_STREAMS);
 		return NULL;
+	}
 
 	stream = kzalloc(sizeof(*stream), GFP_ATOMIC);
 	if (!stream)

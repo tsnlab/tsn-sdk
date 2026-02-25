@@ -1657,20 +1657,6 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		/* FRER (802.1CB): Process R-TAG and perform duplicate elimination */
 		if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled) {
 			int rx_port_id = common->rx_port;
-
-			struct ethhdr *eth = (struct ethhdr *)(rx_buffer->data);
-			struct frer_stream *stream;
-			unsigned long frer_flags;
-			spin_lock_irqsave(&xdev->tsn_config.frer->lock, frer_flags);
-			stream = frer_stream_lookup(xdev->tsn_config.frer,
-							eth->h_source, eth->h_dest);
-			
-			/* Auto-register stream if not found */
-			if (!stream)
-				stream = frer_auto_register_stream(xdev->tsn_config.frer,
-								eth->h_source, eth->h_dest);
-			spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
-
 			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
 			if (frer_result == FRER_DROP_DUPLICATE ||
 			    frer_result == FRER_DROP_OUT_OF_WINDOW) {

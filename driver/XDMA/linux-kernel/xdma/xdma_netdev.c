@@ -138,15 +138,11 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         /* Check desc count */
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
-        skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
-        /* Store packet length */
-        frame_length = skb->len;
-        skb->len = workaround_packet_size(skb->len);
+        frame_length = max((unsigned int)ETH_ZLEN, skb->len);
+        frame_length = workaround_packet_size(frame_length);
 
-        if (skb_padto(skb, skb->len)) {
-                pr_err("skb_padto failed\n");
-                dev_kfree_skb(skb);
+        if (skb_put_padto(skb, frame_length)) {
                 return NETDEV_TX_OK;
         }
 
@@ -160,7 +156,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         }
 
         /* Add metadata to the skb */
-        if (pskb_expand_head(skb, TX_METADATA_SIZE, 0, GFP_ATOMIC) != 0) {
+        if (pskb_expand_head(skb, TX_METADATA_SIZE,
+                             (priv->port_flag & XDMA_PORT_FLAG_FRER) ? FRER_RTAG_SIZE : 0,
+                             GFP_ATOMIC) != 0) {
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("pskb_expand_head failed\n");
 #endif
@@ -212,6 +210,8 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		if (stream && stream->seq_gen.active) {
 			/* Use TX-aware R-TAG insertion */
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
+				pr_err("FRER: Failed to insert R-TAG (tailroom=%d, need=%lu)\n",
+				       skb_tailroom(skb), FRER_RTAG_SIZE);
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;

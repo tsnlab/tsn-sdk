@@ -109,6 +109,7 @@ struct frer_stream {
 	struct frer_seq_gen seq_gen;	/* Talker: sequence generation state */
 	struct frer_seq_recv seq_recv;	/* Listener: sequence recovery state */
 	struct hlist_node hash_node;	/* Hash table linkage */
+	unsigned long last_used;		/* jiffies of last frame TX/RX for LRU eviction */
 };
 
 /* FRER configuration (can be shared across multiple ports) */

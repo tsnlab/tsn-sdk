@@ -13,6 +13,7 @@
 #include <linux/etherdevice.h>
 
 #include "frer.h"
+#include <linux/jiffies.h>
 
 /* Global FRER manager instance */
 struct frer_global g_frer;
@@ -290,6 +291,43 @@ int frer_add_stream(struct frer_config *frer, const struct frer_stream_config *c
 }
 
 /**
+ * frer_evict_oldest_stream - Evict the least recently used stream
+ * @frer: FRER configuration (caller must hold frer->lock)
+ *
+ * Returns 0 on success, -ENOENT if no stream to evict.
+ */
+static int frer_evict_oldest_stream(struct frer_config *frer)
+{
+	struct frer_stream *stream, *oldest = NULL;
+	struct hlist_node *tmp;
+	int bkt;
+	unsigned long oldest_time = jiffies;
+
+	if (frer->stream_count == 0)
+		return -ENOENT;
+
+	hash_for_each_safe(frer->streams, bkt, tmp, stream, hash_node) {
+		if (time_before(stream->last_used, oldest_time)) {
+			oldest_time = stream->last_used;
+			oldest = stream;
+		}
+	}
+
+	if (!oldest)
+		return -ENOENT;
+
+	pr_info("FRER: Evicting oldest stream (unused for %u jiffies)\n",
+		jiffies_to_msecs(jiffies - oldest_time));
+
+	hash_del(&oldest->hash_node);
+	kfree(oldest);
+	frer->stream_count--;
+
+	return 0;
+}
+
+
+/**
  * frer_auto_register_stream - Auto-register a stream for R-TAG insertion
  * @frer: FRER configuration (caller must hold frer->lock)
  * @smac: Source MAC address
@@ -305,9 +343,13 @@ struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
 	u32 hash;
 
 	if (frer->stream_count >= MAX_FRER_STREAMS) {
-		pr_warn_ratelimited("FRER: Stream table full (%d/%d), cannot auto-register\n",
-				    frer->stream_count, MAX_FRER_STREAMS);
-		return NULL;
+		/* Table full - try to evict oldest stream */
+		if (frer_evict_oldest_stream(frer) == 0) {
+			pr_info("FRER: Auto-registered after eviction\\n");
+		} else {
+			pr_err_ratelimited("FRER: Stream table full, cannot auto-register\\n");
+			return NULL;
+		}
 	}
 
 	stream = kzalloc(sizeof(*stream), GFP_ATOMIC);
@@ -319,6 +361,7 @@ struct frer_stream *frer_auto_register_stream(struct frer_config *frer,
 	stream->seq_gen.next_seq = 0;
 	stream->seq_gen.active = true;
 	stream->seq_recv.active = true;
+	stream->last_used = jiffies;
 
 	hash = frer_stream_hash(smac, dmac);
 	hash_add(frer->streams, &stream->hash_node, hash);

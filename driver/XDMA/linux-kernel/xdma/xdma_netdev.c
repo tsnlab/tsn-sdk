@@ -207,10 +207,15 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 			stream = frer_auto_register_stream(xdev->tsn_config.frer,
 							   eth->h_source, eth->h_dest);
 		
-		if (stream && stream->seq_gen.active) {
+		if (!stream) {
+			pr_err_ratelimited("FRER: Failed to get/create stream - dropping packet\\n");
+			spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+			dev_kfree_skb(skb);
+			return NETDEV_TX_OK;
+		} else if (stream->seq_gen.active) {
 			/* Use TX-aware R-TAG insertion */
 			if (frer_insert_rtag_tx(skb, stream, TX_METADATA_SIZE, frame_length) < 0) {
-				pr_err("FRER: Failed to insert R-TAG (tailroom=%d, need=%lu)\n",
+				pr_err("FRER: Failed to insert R-TAG (tailroom=%d, need=%lu)\\n",
 				       skb_tailroom(skb), FRER_RTAG_SIZE);
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
 				dev_kfree_skb(skb);
@@ -219,6 +224,11 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 			/* Update frame length after R-TAG insertion */
 			tx_metadata->frame_length += FRER_RTAG_SIZE;
 			frame_length += FRER_RTAG_SIZE;
+		} else {
+			pr_err_ratelimited("FRER: Stream exists but seq_gen not active - dropping packet\\n");
+			spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+			dev_kfree_skb(skb);
+			return NETDEV_TX_OK;
 		}
 		spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
 	}

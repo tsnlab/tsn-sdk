@@ -44,7 +44,7 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
-sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t reference) {
+sysclock_t _alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t reference, const char *caller) {
         u32 cur_hi = (u32)(current_sysclock >> 32);
         u32 ref_hi = (u32)(reference >> 32);
 
@@ -57,7 +57,7 @@ sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t referen
          * the carry was missed.
          */
         if (cur_hi + 1 == ref_hi) {
-                pr_warn("Sysclock corrected: raw=0x%010llx, ref=0x%010llx\n", current_sysclock, reference);
+                pr_warn_ratelimited("Sysclock corrected [%s]: raw=0x%010llx, ref=0x%010llx\n", caller, current_sysclock, reference);
                 return current_sysclock + (1ULL << 32);
         }
         return current_sysclock;
@@ -77,7 +77,7 @@ sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
         sysclock_t raw = read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
                                 xdev->bar[0] + REG_SYS_CLOCK_LO);
         sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_sysclock);
-        xdev->last_sysclock = raw;
+        xdev->last_sysclock = adjusted;
         return adjusted;
 }
 

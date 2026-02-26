@@ -493,8 +493,11 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);
         }
 
-        pr_warn("Failed to get timestamp: timestamp is not getting updated, " \
-                "the packet might have been dropped\n");
+        pr_warn("Failed to get timestamp: id=%u, cur=0x%010llx, last=0x%010llx, " \
+                "now=0x%010llx, start=0x%010llx, wait=0x%010llx\n",
+                tstamp_id, tx_tstamp, common->last_tx_tstamp[tstamp_id],
+                now, common->tx_work_start_after[tstamp_id],
+                common->tx_work_wait_until[tstamp_id]);
         goto return_error;
 
 got_tstamp:

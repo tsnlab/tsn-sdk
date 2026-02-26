@@ -1613,7 +1613,15 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		engine_status_read(engine, 1, 0);
 		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
 		if (skb_len < 0) {
+			u32 lo, hi;
+
 			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+			ioread32(&engine->regs->status_rc);
+			memset(result, 0, sizeof(*result));
+			lo = cpu_to_le32(PCI_DMA_L(common->rx_bus_addr));
+			hi = cpu_to_le32(PCI_DMA_H(common->rx_bus_addr));
+			iowrite32(lo, &engine->sgdma_regs->first_desc_lo);
+			iowrite32(hi, &engine->sgdma_regs->first_desc_hi);
 			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 			iowrite32(DMA_ENGINE_START, &engine->regs->control);
 			spin_unlock_irqrestore(&common->rx_lock, flag);
@@ -1643,6 +1651,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 				pr_err("Invalid ptp_data\n");
 				return IRQ_NONE;
 			}
+			alinx_get_sys_clock_by_xdev(xdev);
 			spin_lock_irqsave(&ptp_data->lock, ptp_flag);
 			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, alinx_adjust_sysclock(rx_buffer->metadata.timestamp, xdev->last_sysclock));
 			// pr_warn("%s 0x%08llx %llu 0x%08llx %u %u 0x%08llx\n", ndev->name, rx_buffer->metadata.timestamp, skb_hwtstamps(skb)->hwtstamp, alinx_get_sys_clock_by_xdev(xdev), xdev->rx_timestamp_adjustment, xdev->sysclock_adjustment, xdev->last_sysclock);

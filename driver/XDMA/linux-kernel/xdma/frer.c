@@ -659,9 +659,15 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 	spin_lock_irqsave(&frer->lock, flags);
 
 	stream = frer_stream_lookup(frer, smac, dmac);
-	if (!stream || !stream->seq_recv.active) {
+	if (!stream) {
+		stream = frer_auto_register_stream(frer, smac, dmac);
+		if (!stream) {
+			spin_unlock_irqrestore(&frer->lock, flags);
+			goto strip_rtag;
+		}
+	}
+	if (!stream->seq_recv.active) {
 		spin_unlock_irqrestore(&frer->lock, flags);
-		/* Stream not configured for recovery, just strip R-TAG and pass */
 		goto strip_rtag;
 	}
 

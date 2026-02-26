@@ -1644,7 +1644,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 				return IRQ_NONE;
 			}
 			spin_lock_irqsave(&ptp_data->lock, ptp_flag);
-			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, alinx_adjust_sysclock(xdev, rx_buffer->metadata.timestamp, xdev->last_rx_timestamp, &xdev->rx_timestamp_adjustment));
+			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, alinx_adjust_sysclock(rx_buffer->metadata.timestamp, xdev->last_rx_timestamp));
 			xdev->last_rx_timestamp = rx_buffer->metadata.timestamp;
 			// pr_warn("%s 0x%08llx %llu 0x%08llx %u %u 0x%08llx\n", ndev->name, rx_buffer->metadata.timestamp, skb_hwtstamps(skb)->hwtstamp, alinx_get_sys_clock_by_xdev(xdev), xdev->rx_timestamp_adjustment, xdev->sysclock_adjustment, xdev->last_sysclock);
 			// if (priv->last_rx_timestamp > skb_hwtstamps(skb)->hwtstamp) {

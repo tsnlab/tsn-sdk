@@ -402,7 +402,6 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	spin_lock_init(&common->tx_lock);
 	spin_lock_init(&common->rx_lock);
-	spin_lock_init(&xdev->sysclock_lock);
 
 	common->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &common->rx_dma_addr, GFP_KERNEL);
 	if (!common->rx_buffer) {

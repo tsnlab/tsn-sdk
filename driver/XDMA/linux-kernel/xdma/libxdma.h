@@ -637,13 +637,9 @@ struct xdma_dev {
 	enum dev_capabilities capabilities;
 	u64 feature_id;
 
-	spinlock_t sysclock_lock;
 	sysclock_t last_sysclock;
-	uint8_t sysclock_adjustment;
 	sysclock_t last_rx_timestamp;
-	uint8_t rx_timestamp_adjustment;
 	sysclock_t last_tx_timestamp[4];
-	uint8_t tx_timestamp_adjustment[4];
 };
 
 static inline int xdma_device_flag_check(struct xdma_dev *xdev, unsigned int f)

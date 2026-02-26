@@ -175,8 +175,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         tx_metadata->frame_length = frame_length;
 
         sys_count = alinx_get_sys_clock_by_xdev(xdev);
-        // FIXME: Remove this after resolving the sysclock adjustment issue
-        sys_count -= ((sysclock_t)xdev->sysclock_adjustment << 32);
         now = alinx_sysclock_to_timestamp(common->pdev, sys_count);
         sys_count_lower = sys_count & LOWER_29_BITS;
         sys_count_upper = sys_count & ~LOWER_29_BITS;

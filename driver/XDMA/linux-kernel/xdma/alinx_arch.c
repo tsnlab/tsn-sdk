@@ -44,29 +44,27 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
-#define SYSCLOCK_ADJUSTMENT_THRESHOLD (0x80000000ULL)
-sysclock_t alinx_adjust_sysclock(struct xdma_dev *xdev, sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
-        unsigned long flags;
-        if (last_sysclock == 0) {
-                return current_sysclock;
-        }
-        spin_lock_irqsave(&xdev->sysclock_lock, flags);
-        if (current_sysclock + SYSCLOCK_ADJUSTMENT_THRESHOLD < last_sysclock) {
-                pr_err("Sysclock error detected: current_sysclock=0x%08llx, last_sysclock=0x%08llx\n", current_sysclock, last_sysclock);
-                (*adjustment) += 1;
-        } else if ((*adjustment > 0) && ((current_sysclock >> 32) > (last_sysclock >> 32))) {
-                pr_err("Updating adjustment: %u %llu %llu\n", *adjustment, (current_sysclock >> 32), (last_sysclock >> 32));
-                (*adjustment) -= ((current_sysclock >> 32) - (last_sysclock >> 32)) - 1;
-        }
-        spin_unlock_irqrestore(&xdev->sysclock_lock, flags);
-        return current_sysclock + ((sysclock_t)(*adjustment) << 32);
-}
+sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t last_sysclock) {
+        u32 cur_hi = (u32)(current_sysclock >> 32);
+        u32 last_hi = (u32)(last_sysclock >> 32);
+        u32 cur_lo = (u32)current_sysclock;
+        u32 last_lo = (u32)last_sysclock;
 
-sysclock_t alinx_get_adjusted_sysclock(struct xdma_dev *xdev, void* hi_addr, void* lo_addr, sysclock_t* last_sysclock, uint8_t* adjustment) {
-        sysclock_t current_sysclock = read64(hi_addr, lo_addr);
-        sysclock_t adjusted_sysclock = alinx_adjust_sysclock(xdev, current_sysclock, *last_sysclock, adjustment);
-        *last_sysclock = current_sysclock;
-        return adjusted_sysclock;
+        if (last_sysclock == 0)
+                return current_sysclock;
+
+        /*
+         * HW bug: when low 32 bits overflow, the carry to high bits
+         * may be delayed by one read cycle. Detect this by checking:
+         *  1) last_lo was in the upper half (near overflow)
+         *  2) cur_lo is in the lower half (just wrapped)
+         *  3) high didn't increment
+         */
+        if (last_lo >= 0x80000000U && cur_lo < 0x80000000U && cur_hi == last_hi) {
+                pr_warn("Sysclock corrected: raw=0x%010llx, last=0x%010llx\n", current_sysclock, last_sysclock);
+                return current_sysclock + (1ULL << 32);
+        }
+        return current_sysclock;
 }
 
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time) {
@@ -80,9 +78,11 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 }
 
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
-        return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_SYS_CLOCK_HI, xdev->bar[0] + REG_SYS_CLOCK_LO, &xdev->last_sysclock, &xdev->sysclock_adjustment);
-        // return read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
-        //               xdev->bar[0] + REG_SYS_CLOCK_LO);
+        sysclock_t raw = read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
+                                xdev->bar[0] + REG_SYS_CLOCK_LO);
+        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_sysclock);
+        xdev->last_sysclock = raw;
+        return adjusted;
 }
 
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
@@ -111,24 +111,23 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 	return alinx_get_cycle_1s_by_xdev(xdev);
 }
 
+static timestamp_t read_tx_timestamp(struct xdma_dev *xdev, void *hi, void *lo, int idx) {
+        sysclock_t raw = read64(hi, lo);
+        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_tx_timestamp[idx]);
+        xdev->last_tx_timestamp[idx] = raw;
+        return adjusted;
+}
+
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
-                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW, &xdev->last_tx_timestamp[0], &xdev->tx_timestamp_adjustment[0]);
-                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH,
-                //               xdev->bar[0] + REG_TX_TIMESTAMP1_LOW);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW, 0);
         case 2:
-                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW, &xdev->last_tx_timestamp[1], &xdev->tx_timestamp_adjustment[1]);
-                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH,
-                //               xdev->bar[0] + REG_TX_TIMESTAMP2_LOW);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW, 1);
         case 3:
-                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW, &xdev->last_tx_timestamp[2], &xdev->tx_timestamp_adjustment[2]);
-                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH,
-                //               xdev->bar[0] + REG_TX_TIMESTAMP3_LOW);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW, 2);
         case 4:
-                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW, &xdev->last_tx_timestamp[3], &xdev->tx_timestamp_adjustment[3]);
-                // return read64(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH,
-                //               xdev->bar[0] + REG_TX_TIMESTAMP4_LOW);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW, 3);
         default:
                 return 0;
         }

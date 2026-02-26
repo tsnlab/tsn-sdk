@@ -487,7 +487,9 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 }
 
                 tx_tstamp = alinx_read_tx_timestamp_by_xdev(common->xdev, tstamp_id);
-                if (tx_tstamp != common->last_tx_tstamp[tstamp_id])
+                if (tx_tstamp != common->last_tx_tstamp[tstamp_id] &&
+                    tx_tstamp >= common->tx_work_start_after[tstamp_id] &&
+                    tx_tstamp <= now)
                         goto got_tstamp;
 
                 usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);

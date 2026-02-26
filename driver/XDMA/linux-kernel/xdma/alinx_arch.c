@@ -45,18 +45,22 @@ u64 read64(void *addr_high, void *addr_low) {
 #endif
 
 sysclock_t _alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t reference, const char *caller) {
-        u32 cur_hi = (u32)(current_sysclock >> 32);
-        u32 ref_hi = (u32)(reference >> 32);
-
         if (reference == 0)
                 return current_sysclock;
 
         /*
          * HW bug: when low 32 bits overflow, the carry to high bits
-         * may be delayed. If current high is behind the reference high,
-         * the carry was missed.
+         * may be delayed. If current is behind reference by roughly
+         * one high-bit unit (0x1_0000_0000), add the missed carry.
+         *
+         * Case 1: same high, low wrapped (ref was pre-overflow)
+         *   raw=0x0900819a36, ref=0x09ffa226b1 → diff ~0xFF20...
+         * Case 2: ref already corrected to high+1
+         *   raw=0x09008fef67, ref=0x0a00819a36 → diff ~0xFF...
          */
-        if (cur_hi + 1 == ref_hi) {
+        if (current_sysclock < reference &&
+            (reference - current_sysclock) > 0x80000000ULL &&
+            (reference - current_sysclock) < 0x180000000ULL) {
                 pr_warn_ratelimited("Sysclock corrected [%s]: raw=0x%010llx, ref=0x%010llx\n", caller, current_sysclock, reference);
                 return current_sysclock + (1ULL << 32);
         }
@@ -76,7 +80,16 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
         sysclock_t raw = read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
                                 xdev->bar[0] + REG_SYS_CLOCK_LO);
-        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_sysclock);
+        sysclock_t last = xdev->last_sysclock;
+        sysclock_t adjusted = alinx_adjust_sysclock(raw, last);
+
+        if (last && adjusted < last)
+                pr_warn_ratelimited("Sysclock went backward: raw=0x%010llx, adjusted=0x%010llx, last=0x%010llx\n",
+                                    raw, adjusted, last);
+        else if (last && (adjusted - last) > (u64)RESERVED_CYCLE * 2)
+                pr_warn_ratelimited("Sysclock jumped forward: raw=0x%010llx, adjusted=0x%010llx, last=0x%010llx, diff=%llu\n",
+                                    raw, adjusted, last, adjusted - last);
+
         xdev->last_sysclock = adjusted;
         return adjusted;
 }
@@ -109,7 +122,17 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 
 static timestamp_t read_tx_timestamp(struct xdma_dev *xdev, void *hi, void *lo) {
         sysclock_t raw = read64(hi, lo);
-        return alinx_adjust_sysclock(raw, xdev->last_sysclock);
+        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_sysclock);
+        sysclock_t last = xdev->last_sysclock;
+
+        if (last && adjusted > last)
+                pr_warn("TX timestamp in the future: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
+                        raw, adjusted, last, (s64)(adjusted - last));
+        else if (last && (last - adjusted) > (u64)RESERVED_CYCLE * 2)
+                pr_warn("TX timestamp too old: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
+                        raw, adjusted, last, (s64)(last - adjusted));
+
+        return adjusted;
 }
 
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {

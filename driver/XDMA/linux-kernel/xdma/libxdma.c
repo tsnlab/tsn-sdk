@@ -1617,8 +1617,8 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 			iowrite32(DMA_ENGINE_START, &engine->regs->control);
 			spin_unlock_irqrestore(&common->rx_lock, flag);
-			pr_err("Invalid skb_len\n");
-			return IRQ_NONE;
+			pr_warn_ratelimited("Invalid skb_len: result->length=%u\n", result->length);
+			return IRQ_HANDLED;
 		}
 		skb = dev_alloc_skb(skb_len);
 		if (!skb) {

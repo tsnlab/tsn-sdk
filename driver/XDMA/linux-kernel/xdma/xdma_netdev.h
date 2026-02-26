@@ -26,7 +26,8 @@
 
 #define CRC_LEN 4
 
-#define TX_TSTAMP_MAX_RETRY 5
+#define TX_TSTAMP_MAX_RETRY 500
+#define TX_TSTAMP_POLL_US 100
 
 enum xdma_state_t {
         XDMA_TX1_IN_PROGRESS = 1,
@@ -67,7 +68,6 @@ struct xdma_private_common {
         sysclock_t tx_work_wait_until[TSN_TIMESTAMP_ID_MAX];
         struct hwtstamp_config tstamp_config;
         sysclock_t last_tx_tstamp[TSN_TIMESTAMP_ID_MAX];
-        int tstamp_retry[TSN_TIMESTAMP_ID_MAX];
 
         struct delayed_work rx_poll_work;
         unsigned long last_switch_jiffies;

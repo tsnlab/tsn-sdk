@@ -466,46 +466,38 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         struct skb_shared_hwtstamps shhwtstamps;
         struct xdma_private_common* common = container_of(work - tstamp_id, struct xdma_private_common, tx_work[0]);
         struct sk_buff* skb = common->tx_work_skb[tstamp_id];
-        sysclock_t now = alinx_get_sys_clock_by_xdev(common->xdev);
+        sysclock_t now;
         unsigned long ptp_flag;
+        int retry;
 
         if (tstamp_id >= TSN_TIMESTAMP_ID_MAX) {
                 pr_err("Invalid timestamp ID\n");
                 return;
         }
 
-        if (!common->tx_work_skb[tstamp_id]) {
+        if (!skb) {
                 goto return_error;
         }
 
-        if (now < common->tx_work_start_after[tstamp_id]) {
-                goto retry;
-        }
-        /*
-         * Read TX timestamp several times because 
-         * the work thread might try to read TX timestamp
-         * before the register gets updated
-         */
-        tx_tstamp = alinx_read_tx_timestamp_by_xdev(common->xdev, tstamp_id);
-        if (tx_tstamp == common->last_tx_tstamp[tstamp_id]) {
-                if (alinx_get_sys_clock_by_xdev(common->xdev) < common->tx_work_wait_until[tstamp_id]) {
-                        /* The packet might have not been sent yet */
-                        goto retry;
+        for (retry = 0; retry < TX_TSTAMP_MAX_RETRY; retry++) {
+                now = alinx_get_sys_clock_by_xdev(common->xdev);
+                if (now < common->tx_work_start_after[tstamp_id]) {
+                        usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);
+                        continue;
                 }
-                /*
-                 * Tx timestamp is not updated. Try again.
-                 * Waiting for it to be updated forever is not desirable,
-                 * so limit the number of retries
-                 */
-                if (++(common->tstamp_retry[tstamp_id]) >= TX_TSTAMP_MAX_RETRY) {
-                        /* TODO: track the number of skipped packets for ethtool stats */
-                        pr_warn("Failed to get timestamp: timestamp is not getting updated, " \
-                                "the packet might have been dropped\n");
-                        goto return_error;
-                }
-                goto retry;
+
+                tx_tstamp = alinx_read_tx_timestamp_by_xdev(common->xdev, tstamp_id);
+                if (tx_tstamp != common->last_tx_tstamp[tstamp_id])
+                        goto got_tstamp;
+
+                usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);
         }
 
+        pr_warn("Failed to get timestamp: timestamp is not getting updated, " \
+                "the packet might have been dropped\n");
+        goto return_error;
+
+got_tstamp:
         xpdev = dev_get_drvdata(&common->xdev->pdev->dev);
         ptp_data = xpdev->ptp;
         if (!ptp_data) {
@@ -513,10 +505,8 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
                 goto return_error;
         }
 
-        common->tstamp_retry[tstamp_id] = 0;
         spin_lock_irqsave(&ptp_data->lock, ptp_flag);
         shhwtstamps.hwtstamp = ns_to_ktime(alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp));
-        // pr_err("%s 0x%08llx %llu %u\n", skb->dev->name, tx_tstamp, alinx_sysclock_to_txtstamp(common->pdev, tx_tstamp), common->xdev->tx_timestamp_adjustment[tstamp_id]);
         spin_unlock_irqrestore(&ptp_data->lock, ptp_flag);
         common->last_tx_tstamp[tstamp_id] = tx_tstamp;
 
@@ -527,12 +517,11 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         return;
 
 return_error:
-        common->tstamp_retry[tstamp_id] = 0;
+        if (skb) {
+                common->tx_work_skb[tstamp_id] = NULL;
+                dev_kfree_skb_any(skb);
+        }
         clear_bit_unlock(tstamp_id, &common->state);
-        return;
-
-retry:
-        schedule_work(&common->tx_work[tstamp_id]);
         return;
 }
 

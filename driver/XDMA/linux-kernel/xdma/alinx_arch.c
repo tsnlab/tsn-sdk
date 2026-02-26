@@ -44,24 +44,20 @@ u64 read64(void *addr_high, void *addr_low) {
 
 #endif
 
-sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t last_sysclock) {
+sysclock_t alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t reference) {
         u32 cur_hi = (u32)(current_sysclock >> 32);
-        u32 last_hi = (u32)(last_sysclock >> 32);
-        u32 cur_lo = (u32)current_sysclock;
-        u32 last_lo = (u32)last_sysclock;
+        u32 ref_hi = (u32)(reference >> 32);
 
-        if (last_sysclock == 0)
+        if (reference == 0)
                 return current_sysclock;
 
         /*
          * HW bug: when low 32 bits overflow, the carry to high bits
-         * may be delayed by one read cycle. Detect this by checking:
-         *  1) last_lo was in the upper half (near overflow)
-         *  2) cur_lo is in the lower half (just wrapped)
-         *  3) high didn't increment
+         * may be delayed. If current high is behind the reference high,
+         * the carry was missed.
          */
-        if (last_lo >= 0x80000000U && cur_lo < 0x80000000U && cur_hi == last_hi) {
-                pr_warn("Sysclock corrected: raw=0x%010llx, last=0x%010llx\n", current_sysclock, last_sysclock);
+        if (cur_hi + 1 == ref_hi) {
+                pr_warn("Sysclock corrected: raw=0x%010llx, ref=0x%010llx\n", current_sysclock, reference);
                 return current_sysclock + (1ULL << 32);
         }
         return current_sysclock;
@@ -111,23 +107,21 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 	return alinx_get_cycle_1s_by_xdev(xdev);
 }
 
-static timestamp_t read_tx_timestamp(struct xdma_dev *xdev, void *hi, void *lo, int idx) {
+static timestamp_t read_tx_timestamp(struct xdma_dev *xdev, void *hi, void *lo) {
         sysclock_t raw = read64(hi, lo);
-        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_tx_timestamp[idx]);
-        xdev->last_tx_timestamp[idx] = raw;
-        return adjusted;
+        return alinx_adjust_sysclock(raw, xdev->last_sysclock);
 }
 
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
-                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW, 0);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW);
         case 2:
-                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW, 1);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW);
         case 3:
-                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW, 2);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW);
         case 4:
-                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW, 3);
+                return read_tx_timestamp(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW);
         default:
                 return 0;
         }

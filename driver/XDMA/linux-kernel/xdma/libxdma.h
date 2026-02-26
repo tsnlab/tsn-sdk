@@ -638,8 +638,6 @@ struct xdma_dev {
 	u64 feature_id;
 
 	sysclock_t last_sysclock;
-	sysclock_t last_rx_timestamp;
-	sysclock_t last_tx_timestamp[4];
 };
 
 static inline int xdma_device_flag_check(struct xdma_dev *xdev, unsigned int f)

@@ -344,6 +344,9 @@ fn do_client(args: ClientArgs) {
             true
         }
     };
+    let mut tx_ts_failures: u32 = 0;
+    let mut use_sw_tx_fallback = false;
+    const TX_TS_FALLBACK_THRESHOLD: u32 = 3;
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
 
     for ping_id in 1..=args.count {
@@ -366,18 +369,33 @@ fn do_client(args: ClientArgs) {
             eprintln!("Failed to send packet: {}", e);
             continue;
         }
-        let mut tx_timestamp = SystemTime::now();
-        if is_tx_ts_enabled {
-            let msg_ts = sock.get_tx_timestamp();
-            match msg_ts {
+        let tx_timestamp = if is_tx_ts_enabled && !use_sw_tx_fallback {
+            match sock.get_tx_timestamp() {
                 Ok(ts) => {
-                    tx_timestamp = UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32);
+                    tx_ts_failures = 0;
+                    UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
                 }
                 Err(e) => {
-                    eprintln!("Failed to get TX timestamp: {}", e);
+                    tx_ts_failures += 1;
+                    if tx_ts_failures >= TX_TS_FALLBACK_THRESHOLD {
+                        use_sw_tx_fallback = true;
+                        eprintln!(
+                            "Failed to get TX timestamp {} times consecutively, falling back to SW timestamps",
+                            tx_ts_failures
+                        );
+                    } else {
+                        eprintln!("Failed to get TX timestamp: {} (skipping packet {})", e, ping_id);
+                    }
+                    if use_sw_tx_fallback {
+                        SystemTime::now()
+                    } else {
+                        continue;
+                    }
                 }
             }
-        }
+        } else {
+            SystemTime::now()
+        };
         if args.oneway {
             perf_pkt.set_tv_sec(tx_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32);
             perf_pkt.set_tv_nsec(
@@ -394,8 +412,8 @@ fn do_client(args: ClientArgs) {
                 continue;
             }
 
-            // Must consume packet's timestamp
-            if is_tx_ts_enabled {
+            // Must consume packet's timestamp (skip if already in SW fallback to avoid poll timeout)
+            if is_tx_ts_enabled && !use_sw_tx_fallback {
                 let _ = sock.get_tx_timestamp();
             }
         } else {

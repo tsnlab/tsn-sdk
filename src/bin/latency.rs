@@ -469,28 +469,42 @@ fn recv_perf_packet<'a>(
     while start.elapsed().as_secs() < TIMEOUT_SEC {
         let mut rx_timestamp;
         let recv_bytes = {
-            match sock.msg {
-                Some(mut msg) => {
-                    let res = unsafe { libc::recvmsg(sock.fd, &mut msg, 0) };
-                    rx_timestamp = SystemTime::now(); // Fallback default value
-                    if res == -1 {
-                        continue;
-                    } else if res == 0 {
-                        eprintln!("????");
-                        continue;
-                    }
-                    match sock.get_rx_timestamp() {
-                        Ok(ts) => {
-                            rx_timestamp =
-                                UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
-                        }
-                        Err(_) => {
-                            eprintln!("Failed to get RX timestamp");
-                        }
-                    }
-                    res as usize
+            if sock.rx_timestamp_enabled {
+                const CONTROL_SIZE: usize = 1024;
+                let mut control = [0u8; CONTROL_SIZE];
+                let mut iov = libc::iovec {
+                    iov_base: packet.as_mut_ptr() as *mut libc::c_void,
+                    iov_len: packet.len(),
+                };
+                let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+                msg.msg_name = std::ptr::null_mut();
+                msg.msg_namelen = 0;
+                msg.msg_iov = &mut iov;
+                msg.msg_iovlen = 1;
+                msg.msg_control = control.as_mut_ptr() as *mut libc::c_void;
+                msg.msg_controllen = control.len();
+                msg.msg_flags = 0;
+
+                let res = unsafe { libc::recvmsg(sock.fd, &mut msg, 0) };
+                rx_timestamp = SystemTime::now(); // Fallback to SW timestamp
+
+                if res == -1 {
+                    continue;
+                } else if res == 0 {
+                    continue;
                 }
-                _ => match sock.recv(packet) {
+
+                if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+                    eprintln!("RX control data truncated; falling back to SW timestamp");
+                } else if let Some(ts) = parse_rx_timestamp(&msg) {
+                    rx_timestamp = ts;
+                } else {
+                    eprintln!("Failed to parse RX HW timestamp; falling back to SW timestamp");
+                }
+
+                res as usize
+            } else {
+                match sock.recv(packet) {
                     Ok(size) => {
                         rx_timestamp = SystemTime::now();
                         size as usize
@@ -498,7 +512,7 @@ fn recv_perf_packet<'a>(
                     Err(_) => {
                         continue;
                     }
-                },
+                }
             }
         };
 
@@ -512,6 +526,38 @@ fn recv_perf_packet<'a>(
         return Some((rx_timestamp, eth_pkt));
     }
 
+    None
+}
+
+fn parse_rx_timestamp(msg: &libc::msghdr) -> Option<SystemTime> {
+    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(msg as *const _ as *mut libc::msghdr) };
+    while !cmsg.is_null() {
+        let cmsg_level = unsafe { (*cmsg).cmsg_level };
+        let cmsg_type = unsafe { (*cmsg).cmsg_type };
+
+        if cmsg_level == libc::SOL_SOCKET && cmsg_type == libc::SO_TIMESTAMPING {
+            let ts = unsafe { *(libc::CMSG_DATA(cmsg) as *const [libc::timespec; 3]) };
+            let selected = if ts[2].tv_sec != 0 || ts[2].tv_nsec != 0 {
+                Some(ts[2])
+            } else if ts[1].tv_sec != 0 || ts[1].tv_nsec != 0 {
+                Some(ts[1])
+            } else if ts[0].tv_sec != 0 || ts[0].tv_nsec != 0 {
+                eprintln!("SW RX timestamp used");
+                Some(ts[0])
+            } else {
+                None
+            };
+
+            if let Some(ts) = selected {
+                if ts.tv_sec >= 0 && ts.tv_nsec >= 0 {
+                    return Some(UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32));
+                }
+            }
+            return None;
+        }
+
+        cmsg = unsafe { libc::CMSG_NXTHDR(msg as *const _ as *mut libc::msghdr, cmsg) };
+    }
     None
 }
 

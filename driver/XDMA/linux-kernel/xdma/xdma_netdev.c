@@ -494,24 +494,25 @@ static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         }
 
         for (retry = 0; retry < TX_TSTAMP_MAX_RETRY; retry++) {
-                now = alinx_get_sys_clock_by_xdev(common->xdev);
-                if (now < common->tx_work_start_after[tstamp_id]) {
-                        usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);
-                        continue;
-                }
+                now = alinx_read_sys_clock_raw(common->xdev);
 
                 tx_tstamp = alinx_read_tx_timestamp_by_xdev(common->xdev, tstamp_id);
-                if (tx_tstamp != common->last_tx_tstamp[tstamp_id] &&
-                    tx_tstamp >= common->tx_work_start_after[tstamp_id] &&
-                    tx_tstamp <= now)
+                if (tx_tstamp >= common->tx_work_start_after[tstamp_id] &&
+                    tx_tstamp <= now) {
+                        now = alinx_get_sys_clock_by_xdev(common->xdev);
                         goto got_tstamp;
+                }
+
+                if (now > common->tx_work_wait_until[tstamp_id] &&
+                    (now - common->tx_work_wait_until[tstamp_id]) > TX_TSTAMP_TIMEOUT_MARGIN)
+                        break;
 
                 usleep_range(TX_TSTAMP_POLL_US, TX_TSTAMP_POLL_US * 2);
         }
 
-        pr_warn("Failed to get timestamp: id=%u, cur=0x%010llx, last=0x%010llx, " \
+        pr_warn("Failed to get timestamp: id=%u, cur=0x%010llx, " \
                 "now=0x%010llx, start=0x%010llx, wait=0x%010llx\n",
-                tstamp_id, tx_tstamp, common->last_tx_tstamp[tstamp_id],
+                tstamp_id, tx_tstamp,
                 now, common->tx_work_start_after[tstamp_id],
                 common->tx_work_wait_until[tstamp_id]);
         goto return_error;

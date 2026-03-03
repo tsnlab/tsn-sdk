@@ -205,6 +205,7 @@ sysclock_t _alinx_adjust_sysclock(sysclock_t current_sysclock, sysclock_t refere
 #define alinx_adjust_sysclock(cur, ref) _alinx_adjust_sysclock(cur, ref, __func__)
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time);
 void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time);
+sysclock_t alinx_read_sys_clock_raw(struct xdma_dev *xdev);
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *pdev);
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev);
 void alinx_set_cycle_1s_by_xdev(struct xdma_dev *xdev, u32 cycle_1s);

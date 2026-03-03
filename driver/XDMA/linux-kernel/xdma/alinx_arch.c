@@ -77,6 +77,13 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 	alinx_set_pulse_at_by_xdev(xdev, time);
 }
 
+sysclock_t alinx_read_sys_clock_raw(struct xdma_dev *xdev) {
+        sysclock_t raw = read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
+                                xdev->bar[0] + REG_SYS_CLOCK_LO);
+        sysclock_t last = READ_ONCE(xdev->last_sysclock);
+        return alinx_adjust_sysclock(raw, last);
+}
+
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
         sysclock_t raw = read64(xdev->bar[0] + REG_SYS_CLOCK_HI,
                                 xdev->bar[0] + REG_SYS_CLOCK_LO);

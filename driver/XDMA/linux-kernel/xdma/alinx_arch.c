@@ -127,16 +127,24 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 	return alinx_get_cycle_1s_by_xdev(xdev);
 }
 
+/*
+ * TX timestamps can legitimately be slightly ahead of last_sysclock
+ * because the packet leaves the MAC after the last sysclock read.
+ * Only warn when the difference is large enough to indicate real
+ * tearing or a stale register.
+ */
+#define TX_TSTAMP_FUTURE_THRESHOLD 500000
+
 static timestamp_t read_tx_timestamp(struct xdma_dev *xdev, void *hi, void *lo) {
         sysclock_t raw = read64(hi, lo);
-        sysclock_t adjusted = alinx_adjust_sysclock(raw, xdev->last_sysclock);
-        sysclock_t last = xdev->last_sysclock;
+        sysclock_t last = READ_ONCE(xdev->last_sysclock);
+        sysclock_t adjusted = alinx_adjust_sysclock(raw, last);
 
-        if (last && adjusted > last)
-                pr_warn("TX timestamp in the future: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
+        if (last && adjusted > last && (adjusted - last) > TX_TSTAMP_FUTURE_THRESHOLD)
+                pr_warn_ratelimited("TX timestamp in the future: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
                         raw, adjusted, last, (s64)(adjusted - last));
-        else if (last && (last - adjusted) > (u64)RESERVED_CYCLE * 2)
-                pr_warn("TX timestamp too old: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
+        if (last && adjusted < last && (last - adjusted) > (u64)RESERVED_CYCLE * 2)
+                pr_warn_ratelimited("TX timestamp too old: raw=0x%010llx, adjusted=0x%010llx, last_sysclock=0x%010llx, diff=%lld\n",
                         raw, adjusted, last, (s64)(last - adjusted));
 
         return adjusted;

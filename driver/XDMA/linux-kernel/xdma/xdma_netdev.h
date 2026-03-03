@@ -26,8 +26,9 @@
 
 #define CRC_LEN 4
 
-#define TX_TSTAMP_MAX_RETRY 500
-#define TX_TSTAMP_POLL_US 100
+#define TX_TSTAMP_POLL_US 10
+#define TX_TSTAMP_MAX_RETRY 5000
+#define TX_TSTAMP_TIMEOUT_MARGIN (RESERVED_CYCLE / 10)
 
 enum xdma_state_t {
         XDMA_TX1_IN_PROGRESS = 1,

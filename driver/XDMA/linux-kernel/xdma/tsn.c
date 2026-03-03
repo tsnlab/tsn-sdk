@@ -162,7 +162,9 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	} else if (is_gptp) {
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_GPTP;
 	} else {
-		metadata->timestamp_id = TSN_TIMESTAMP_ID_NORMAL;
+		int idx = atomic_inc_return(&common->next_normal_tstamp_id);
+		metadata->timestamp_id = TSN_TIMESTAMP_ID_NORMAL +
+			(idx % (TSN_TIMESTAMP_ID_MAX - TSN_TIMESTAMP_ID_NORMAL));
 	}
 
 	decrease_buffer_space(xdev);

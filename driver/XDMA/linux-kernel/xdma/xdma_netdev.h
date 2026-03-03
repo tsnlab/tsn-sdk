@@ -91,6 +91,8 @@ struct xdma_private_common {
 
         int open_cnt;
         unsigned long state;
+
+        atomic_t next_normal_tstamp_id;
 };
 
 struct xdma_private {

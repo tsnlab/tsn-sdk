@@ -134,6 +134,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         struct xdma_tx_queue *queue;
         u32 to_value;
         unsigned long flags;
+        bool tstamp_acquired = false;
 
 
         /* Check desc count */
@@ -190,6 +191,21 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 xdma_stop_all_queues(xdev);
 	}
 
+	/* Acquire TX timestamp slot early, before FRER / DMA / enqueue.
+	 * If the slot is busy, undo metadata and return NETDEV_TX_BUSY so
+	 * the qdisc retries later — no FRER or DMA state to roll back. */
+	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
+	    common->tstamp_config.tx_type == HWTSTAMP_TX_ON) {
+		if (test_and_set_bit_lock(tx_metadata->timestamp_id,
+					  &common->state)) {
+			pr_debug_ratelimited("Timestamp busy (id=%u): retry\n",
+					     tx_metadata->timestamp_id);
+			skb_pull(skb, TX_METADATA_SIZE);
+			return NETDEV_TX_BUSY;
+		}
+		tstamp_acquired = true;
+	}
+
 	/* FRER (802.1CB): Insert R-TAG with auto stream registration */
 	if (xdev->tsn_config.frer && xdev->tsn_config.frer->enabled && (priv->port_flag & XDMA_PORT_FLAG_FRER)) {
 		struct ethhdr *eth = (struct ethhdr *)(tx_buffer->data);
@@ -208,6 +224,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		if (!stream) {
 			pr_err_ratelimited("FRER: Failed to get/create stream - dropping packet\\n");
 			spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+			if (tstamp_acquired)
+				clear_bit_unlock(tx_metadata->timestamp_id,
+						 &common->state);
 			dev_kfree_skb(skb);
 			return NETDEV_TX_OK;
 		} else if (stream->seq_gen.active) {
@@ -216,6 +235,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 				pr_err("FRER: Failed to insert R-TAG (tailroom=%d, need=%lu)\\n",
 				       skb_tailroom(skb), FRER_RTAG_SIZE);
 				spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+				if (tstamp_acquired)
+					clear_bit_unlock(tx_metadata->timestamp_id,
+							 &common->state);
 				dev_kfree_skb(skb);
 				return NETDEV_TX_OK;
 			}
@@ -225,6 +247,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 		} else {
 			pr_err_ratelimited("FRER: Stream exists but seq_gen not active - dropping packet\\n");
 			spin_unlock_irqrestore(&xdev->tsn_config.frer->lock, frer_flags);
+			if (tstamp_acquired)
+				clear_bit_unlock(tx_metadata->timestamp_id,
+						 &common->state);
 			dev_kfree_skb(skb);
 			return NETDEV_TX_OK;
 		}
@@ -255,6 +280,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 pr_err("TX queue is full\n");
 #endif
                 spin_unlock_irqrestore(&common->tx_queue_lock, flags);
+                if (tstamp_acquired)
+                        clear_bit_unlock(tx_metadata->timestamp_id,
+                                         &common->state);
                 return NETDEV_TX_BUSY;
         }
 
@@ -262,39 +290,25 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
                 spin_unlock_irqrestore(&common->tx_queue_lock, flags);
+                if (tstamp_acquired)
+                        clear_bit_unlock(tx_metadata->timestamp_id,
+                                         &common->state);
                 return NETDEV_TX_BUSY;
         }
 
-        if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
-                if (common->tstamp_config.tx_type == HWTSTAMP_TX_ON &&
-                        !test_and_set_bit_lock(tx_metadata->timestamp_id, &common->state)) {
-                        skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
-                        common->tx_work_skb[tx_metadata->timestamp_id] = skb_get(skb);
-                        /*
-                         * Even if the driver's intention was sys_count == from,
-                         * there might be a slight error caused during conversion (sysclock <-> timestamp)
-                         * So if the diffence is small, don't consider it as overflow.
-                         * Adding/Subtracting directly from values can cause another overflow,
-                         * so just calculate the difference.
-                         */
-                        common->tx_work_start_after[tx_metadata->timestamp_id] = sys_count_upper | tx_metadata->from.tick;
-                        if (sys_count_lower > tx_metadata->from.tick && sys_count_lower - tx_metadata->from.tick > TX_WORK_OVERFLOW_MARGIN) {
-                                // Overflow
-                                common->tx_work_start_after[tx_metadata->timestamp_id] += (1 << 29);
-                        }
-                        to_value = (tx_metadata->fail_policy == TSN_FAIL_POLICY_RETRY ? tx_metadata->delay_to.tick : tx_metadata->to.tick);
-                        common->tx_work_wait_until[tx_metadata->timestamp_id] = sys_count_upper | to_value;
-                        if (sys_count_lower > to_value && sys_count_lower - to_value > TX_WORK_OVERFLOW_MARGIN) {
-                                // Overflow
-                                common->tx_work_wait_until[tx_metadata->timestamp_id] += (1 << 29);
-                        }
-                        schedule_work(&common->tx_work[tx_metadata->timestamp_id]);
-                } else if (common->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
-                        pr_warn("Timestamp skipped: timestamp config is off\n");
-                } else {
-                        pr_warn("Timestamp skipped: driver is waiting for previous packet's timestamp\n");
+        if (tstamp_acquired) {
+                skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+                common->tx_work_skb[tx_metadata->timestamp_id] = skb_get(skb);
+                common->tx_work_start_after[tx_metadata->timestamp_id] = sys_count_upper | tx_metadata->from.tick;
+                if (sys_count_lower > tx_metadata->from.tick && sys_count_lower - tx_metadata->from.tick > TX_WORK_OVERFLOW_MARGIN) {
+                        common->tx_work_start_after[tx_metadata->timestamp_id] += (1 << 29);
                 }
-                // TODO: track the number of skipped packets for ethtool stats
+                to_value = (tx_metadata->fail_policy == TSN_FAIL_POLICY_RETRY ? tx_metadata->delay_to.tick : tx_metadata->to.tick);
+                common->tx_work_wait_until[tx_metadata->timestamp_id] = sys_count_upper | to_value;
+                if (sys_count_lower > to_value && sys_count_lower - to_value > TX_WORK_OVERFLOW_MARGIN) {
+                        common->tx_work_wait_until[tx_metadata->timestamp_id] += (1 << 29);
+                }
+                schedule_work(&common->tx_work[tx_metadata->timestamp_id]);
         }
 
         xdma_tx_queue_enqueue(queue, skb, dma_addr, priv->port_id);
@@ -516,17 +530,38 @@ got_tstamp:
         common->last_tx_tstamp[tstamp_id] = tx_tstamp;
 
         common->tx_work_skb[tstamp_id] = NULL;
-        clear_bit_unlock(tstamp_id, &common->state);
         skb_tstamp_tx(skb, &shhwtstamps);
         dev_kfree_skb_any(skb);
+        clear_bit_unlock(tstamp_id, &common->state);
+        xdma_start_all_queues(common->xdev);
         return;
 
 return_error:
         if (skb) {
+                /*
+                 * Deliver a fallback PTP-clock timestamp so that userspace
+                 * poll(POLLPRI) on the error queue does not stall for the full
+                 * timeout.  Without this, the latency tool falls back to
+                 * SystemTime::now() (wall-clock / TAI) which is in a completely
+                 * different epoch from HW timestamps.
+                 */
+                struct skb_shared_hwtstamps fallback;
+                memset(&fallback, 0, sizeof(fallback));
+                xpdev = dev_get_drvdata(&common->xdev->pdev->dev);
+                ptp_data = xpdev->ptp;
+                if (ptp_data) {
+                        spin_lock_irqsave(&ptp_data->lock, ptp_flag);
+                        now = alinx_get_sys_clock_by_xdev(common->xdev);
+                        fallback.hwtstamp = ns_to_ktime(
+                                alinx_sysclock_to_txtstamp(common->pdev, now));
+                        spin_unlock_irqrestore(&ptp_data->lock, ptp_flag);
+                }
+                skb_tstamp_tx(skb, &fallback);
                 common->tx_work_skb[tstamp_id] = NULL;
                 dev_kfree_skb_any(skb);
         }
         clear_bit_unlock(tstamp_id, &common->state);
+        xdma_start_all_queues(common->xdev);
         return;
 }
 

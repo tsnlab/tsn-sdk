@@ -72,7 +72,7 @@ static inline sysclock_t tsn_timestamp_to_sysclock(struct pci_dev* pdev, timesta
  * @param tx_buf: The frame to be sent
  * @return: true if the frame reserves timestamps, false is for drop
  */
-bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* skb) {
+bool tsn_fill_metadata(struct xdma_dev* xdev, timestamp_t now, struct sk_buff* skb) {
 	uint8_t vlan_prio, tc_id;
 	uint64_t duration_ns;
 	bool is_gptp, consider_delay;
@@ -81,7 +81,7 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct timestamps timestamps;
 	struct tx_buffer* tx_buf = (struct tx_buffer*)skb->data;
 	struct tx_metadata* metadata = (struct tx_metadata*)&tx_buf->metadata;
-	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	struct pci_dev* pdev = xdev->pdev;
 	struct tsn_config* tsn_config = &xdev->tsn_config;
 	struct xdma_private* priv = netdev_priv(xdev->ndev[0]);  // TODO: TSN config per port
 	struct xdma_private_common* common = priv->common;

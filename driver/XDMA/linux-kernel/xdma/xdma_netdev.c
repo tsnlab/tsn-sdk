@@ -182,7 +182,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
 
 	/* Set the fromtick & to_tick values based on the lower 29 bits of the system count */
-	if (tsn_fill_metadata(xdev->pdev, now, skb) == false) {
+	if (tsn_fill_metadata(xdev, now, skb) == false) {
 #ifdef __LIBXDMA_DEBUG__
 		pr_warn("tsn_fill_metadata failed\n");
 #endif

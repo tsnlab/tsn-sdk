@@ -36,7 +36,7 @@ struct tsn_vlan_hdr {
 	uint16_t vid:12;
 } __attribute__((packed, scalar_storage_order("big-endian")));
 
-bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* skb);
+bool tsn_fill_metadata(struct xdma_dev* xdev, timestamp_t now, struct sk_buff* skb);
 void tsn_init_configs(struct pci_dev* pdev);
 void tsn_cleanup_configs(struct pci_dev* pdev);
 

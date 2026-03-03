@@ -1530,8 +1530,20 @@ void xdma_rx_poll_work(struct work_struct *work) {
 		}
 	}
 
-	/* Switch port if needed and restart DMA to trigger transfer */
-	xdma_swap_ports(xdev, common->tx_port, target_port);
+	/*
+	 * Hold tx_lock while switching ports so we don't clobber the TX port
+	 * that xdma_tx_queue_work set up for an in-flight DMA transfer.
+	 * If a TX is in progress, only update the RX port.
+	 */
+	{
+		unsigned long flags;
+		int safe_tx_port;
+
+		spin_lock_irqsave(&common->tx_lock, flags);
+		safe_tx_port = common->tx_port;
+		xdma_swap_ports(xdev, safe_tx_port, target_port);
+		spin_unlock_irqrestore(&common->tx_lock, flags);
+	}
 
 	/* Reschedule poll work */
 	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));

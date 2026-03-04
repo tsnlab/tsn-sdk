@@ -314,6 +314,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         xdma_tx_queue_enqueue(queue, skb, dma_addr, priv->port_id);
         spin_unlock_irqrestore(&common->tx_queue_lock, flags);
 
+        if (!tstamp_acquired)
+                xdma_start_all_queues(xdev);
+
         return NETDEV_TX_OK;
 }
 

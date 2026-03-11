@@ -603,6 +603,7 @@ static inline int16_t frer_seq_diff(uint16_t a, uint16_t b)
  *   FRER_DROP_DUPLICATE - Frame is a duplicate and should be dropped
  *   FRER_DROP_OUT_OF_WINDOW - Frame is too old (outside history window)
  *   FRER_NO_RTAG - Frame does not contain R-TAG
+ *   FRER_DROP_NOT_FOR_US - Unicast to another host (dropped unless promisc)
  *   FRER_ERROR - Error processing frame
  */
 int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id)
@@ -649,6 +650,17 @@ int frer_process_rtag(struct sk_buff *skb, struct frer_config *frer, int port_id
 	/* Validate packet length */
 	if (skb->len < rtag_offset + FRER_RTAG_SIZE) {
 		return FRER_ERROR;
+	}
+
+	/* Drop unicast frames not destined to us unless in promiscuous mode */
+	if (valid_port && frer->ports[port_id]) {
+		struct net_device *ndev = frer->ports[port_id];
+
+		if (!(ndev->flags & IFF_PROMISC) &&
+		    !is_broadcast_ether_addr(dmac) &&
+		    !is_multicast_ether_addr(dmac) &&
+		    !ether_addr_equal(dmac, ndev->dev_addr))
+			return FRER_DROP_NOT_FOR_US;
 	}
 
 	rtag = (struct frer_rtag *)(skb->data + rtag_offset);

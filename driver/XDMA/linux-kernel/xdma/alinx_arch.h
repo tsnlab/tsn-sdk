@@ -88,9 +88,9 @@ typedef uint32_t u32
 
 #define TX_SKBUFF_QUEUE_CAPACITY 1024
 
-/* FRER (802.1CB) configuration limits */
-#define MAX_FRER_STREAMS 64
-#define FRER_HASH_BITS 6
+/* FRER (802.1CB) configuration limits - 256 for 16-node full mesh (16*15=240) */
+#define MAX_FRER_STREAMS 256
+#define FRER_HASH_BITS 8
 
 #define ETHERNET_GAP_SIZE (8 + 4 + 12) // 8 bytes preamble, 4 bytes FCS, 12 bytes interpacket gap
 #define PHY_DELAY_CLOCKS 13 // 14 clocks from MAC to PHY, but sometimes there is 1 tick error

@@ -1679,7 +1679,8 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			int rx_port_id = common->rx_port;
 			int frer_result = frer_process_rtag(skb, xdev->tsn_config.frer, rx_port_id);
 			if (frer_result == FRER_DROP_DUPLICATE ||
-			    frer_result == FRER_DROP_OUT_OF_WINDOW) {
+			    frer_result == FRER_DROP_OUT_OF_WINDOW ||
+			    frer_result == FRER_DROP_NOT_FOR_US) {
 				dev_kfree_skb(skb);
 				iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
 				channel_interrupts_enable(engine->xdev, engine->irq_bitmask);

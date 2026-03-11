@@ -20,9 +20,9 @@
 /* R-TAG EtherType (IEEE 802.1CB) */
 #define ETH_P_RTAG		0xF1C1
 
-/* FRER configuration limits */
-#define MAX_FRER_STREAMS	64
-#define FRER_HASH_BITS		6
+/* FRER configuration limits (256 for 16-node full mesh: 16*15=240 streams) */
+#define MAX_FRER_STREAMS	256
+#define FRER_HASH_BITS		8
 #define MAX_FRER_PORTS		2
 
 /* Vector Recovery Algorithm history window size (in bits) */
@@ -33,6 +33,7 @@
 #define FRER_DROP_DUPLICATE	1
 #define FRER_DROP_OUT_OF_WINDOW	2
 #define FRER_NO_RTAG		3
+#define FRER_DROP_NOT_FOR_US	4	/* Unicast to other host; only process in promisc */
 #define FRER_ERROR		-1
 
 /* R-TAG structure (IEEE 802.1CB)

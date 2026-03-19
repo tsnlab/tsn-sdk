@@ -204,27 +204,7 @@ void tsn_init_configs(struct pci_dev* pdev) {
 
 static void bake_qos_config(struct tsn_config* config) {
 	int slot_id, tc_id; // Iterators
-	bool qav_disabled = true;
 	struct qbv_baked_config* baked;
-	// if (config->qbv.enabled == false) {
-	// 	// TODO: remove this when throughput issue without QoS gets resolved
-	// 	for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-	// 		if (config->qav[tc_id].enabled) {
-	// 			qav_disabled = false;
-	// 			break;
-	// 		}
-	// 	}
-
-	// 	if (qav_disabled) {
-	// 		config->qbv.enabled = true;
-	// 		config->qbv.start = 0;
-	// 		config->qbv.slot_count = 1;
-	// 		config->qbv.slots[0].duration_ns = 1000000000; // 1s
-	// 		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
-	// 			config->qbv.slots[0].opened_prios[tc_id] = true;
-	// 		}
-	// 	}
-	// }
 
 	baked = &config->qbv_baked;
 	memset(baked, 0, sizeof(struct qbv_baked_config));

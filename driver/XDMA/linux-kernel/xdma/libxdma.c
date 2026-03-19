@@ -1997,8 +1997,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 		rv = pci_enable_msix(pdev, xdev->entry, req_nvec);
 #endif
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI-X mode: %d\n", rv);
+		}
 
 		xdev->msix_enabled = 1;
 
@@ -2007,8 +2008,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 		/* enable message signalled interrupts */
 		dbg_init("pci_enable_msi()\n");
 		rv = pci_enable_msi(pdev);
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI mode: %d\n", rv);
+		}
 		xdev->msi_enabled = 1;
 
 	} else {
@@ -2268,10 +2270,11 @@ static int irq_msi_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, 0, xdev->mod_name, xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2309,10 +2312,11 @@ static int irq_legacy_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, IRQF_SHARED, xdev->mod_name,
 			 xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2779,12 +2783,13 @@ struct xdma_transfer *engine_cyclic_stop(struct xdma_engine *engine)
 		}
 
 		if (transfer->cyclic) {
-			if (engine->xdma_perf)
+			if (engine->xdma_perf) {
 				dbg_perf("Stopping perf transfer on %s\n",
 					 engine->name);
-			else
+			} else {
 				dbg_perf("Stopping cyclic transfer on %s\n",
 					 engine->name);
+			}
 			/* free up the buffer allocated for perf run */
 			if (engine->perf_buf_virt)
 				dma_free_coherent(&engine->xdev->pdev->dev,

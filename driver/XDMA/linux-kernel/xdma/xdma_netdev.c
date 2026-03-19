@@ -24,7 +24,7 @@ static size_t workaround_packet_size(size_t size) {
         return size;
 }
 
-static void tx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
+void tx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len)
 {
         u32 control_field;
         u32 control;
@@ -113,20 +113,20 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 {
         struct xdma_private *priv = netdev_priv(ndev);
         struct xdma_dev *xdev = priv->xdev;
-        u32 w;
         sysclock_t sys_count, sys_count_upper, sys_count_lower;
         timestamp_t now;
         u16 frame_length;
         dma_addr_t dma_addr;
         struct tx_buffer* tx_buffer;
         struct tx_metadata* tx_metadata;
+        struct xdma_tx_queue *queue;
+        unsigned long flag;
         u32 to_value;
         u16 q;
 
 
         /* Check desc count */
         q = skb_get_queue_mapping(skb);
-        netif_stop_subqueue(ndev, q);
         xdma_debug("xdma_netdev_start_xmit(skb->len : %d)\n", skb->len);
         skb->len = max((unsigned int)ETH_ZLEN, skb->len);
 
@@ -136,7 +136,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
         if (skb_padto(skb, skb->len)) {
                 pr_err("skb_padto failed\n");
-                netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -146,7 +145,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("Jumbo frames not supported\n");
 #endif
-                netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -156,7 +154,6 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_err("pskb_expand_head failed\n");
 #endif
-                netif_wake_subqueue(ndev, q);
                 dev_kfree_skb(skb);
                 return NETDEV_TX_OK;
         }
@@ -181,8 +178,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 #ifdef __LIBXDMA_DEBUG__
                 pr_warn("tsn_fill_metadata failed\n");
 #endif
-                netif_wake_subqueue(ndev, q);
-                return NETDEV_TX_BUSY;
+                netif_stop_subqueue(ndev, q);
         }
 
         xdma_debug("0x%08x  0x%08x  0x%08x  %4d  %1d",
@@ -190,11 +186,33 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 tx_metadata->frame_length, tx_metadata->fail_policy);
         dump_buffer((unsigned char*)tx_metadata, (int)(sizeof(struct tx_metadata) + skb->len));
 
+        spin_lock_irqsave(&priv->tx_queue_lock, flag);
+
+        switch (tx_metadata->from.priority) {
+                case TSN_PRIO_GPTP:
+                        queue = &priv->gptp_tx_queue;
+                        break;
+                case TSN_PRIO_VLAN:
+                        queue = &priv->vlan_tx_queue;
+                        break;
+                default:
+                        queue = &priv->be_tx_queue;
+                        break;
+        }
+
+        if (xdma_tx_queue_is_full(queue)) {
+#ifdef __LIBXDMA_DEBUG__
+                pr_err("TX queue is full\n");
+#endif
+                spin_unlock_irqrestore(&priv->tx_queue_lock, flag);
+                return NETDEV_TX_BUSY;
+        }
+
         dma_addr = dma_map_single(&xdev->pdev->dev, skb->data, skb->len, DMA_TO_DEVICE);
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
-                netif_wake_subqueue(ndev, q);
-                return NETDEV_TX_BUSY;
+                spin_unlock_irqrestore(&priv->tx_queue_lock, flag);
+                return NETDEV_TX_OK;
         }
 
         if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
@@ -229,19 +247,9 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
                 // TODO: track the number of skipped packets for ethtool stats
         }
 
-        /* netif_wake_queue() will be called in xdma_isr() */
-        priv->tx_dma_addr = dma_addr;
-        priv->tx_skb = skb;
-        tx_desc_set(priv->tx_desc, dma_addr, skb->len);
+        xdma_tx_queue_enqueue(queue, skb, dma_addr);
+        spin_unlock_irqrestore(&priv->tx_queue_lock, flag);
 
-        w = cpu_to_le32(PCI_DMA_L(priv->tx_bus_addr));
-        iowrite32(w, xdev->bar[1] + DESC_REG_LO);
-
-        w = cpu_to_le32(PCI_DMA_H(priv->tx_bus_addr));
-        iowrite32(w, xdev->bar[1] + DESC_REG_HI);
-        iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
-
-        iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
         return NETDEV_TX_OK;
 }
 

@@ -76,6 +76,14 @@ struct xdma_private {
         uint64_t last_to_overflow_popped;
         uint64_t last_to_overflow_timeout;
 
+        struct work_struct tx_queue_work;
+        spinlock_t tx_queue_lock;
+        bool is_running;
+
+        struct xdma_tx_queue gptp_tx_queue;
+        struct xdma_tx_queue vlan_tx_queue;
+        struct xdma_tx_queue be_tx_queue;
+
         unsigned long state;
 };
 
@@ -117,6 +125,7 @@ struct rx_buffer {
 #define RX_METADATA_SIZE (sizeof(struct rx_metadata))
 #define TX_METADATA_SIZE (sizeof(struct tx_metadata))
 
+void tx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len);
 void rx_desc_set(struct xdma_desc *desc, dma_addr_t addr, u32 len);
 
 /*

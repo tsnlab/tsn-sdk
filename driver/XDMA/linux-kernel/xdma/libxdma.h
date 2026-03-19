@@ -709,4 +709,10 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 
 void channel_interrupts_disable(struct xdma_dev *xdev, u32 mask);
 void channel_interrupts_enable(struct xdma_dev *xdev, u32 mask);
+
+bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue);
+bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue);
+struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue);
+void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr);
+void xdma_tx_queue_work(struct work_struct *work);
 #endif /* XDMA_LIB_H */

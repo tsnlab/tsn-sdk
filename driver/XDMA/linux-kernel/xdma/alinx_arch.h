@@ -68,6 +68,8 @@ typedef uint32_t u32
 #define TSN_PRIO_COUNT 8
 #define MAX_QBV_SLOTS 20
 
+#define TX_SKBUFF_QUEUE_CAPACITY 1024
+
 #define ETHERNET_GAP_SIZE (8 + 4 + 12) // 8 bytes preamble, 4 bytes FCS, 12 bytes interpacket gap
 #define PHY_DELAY_CLOCKS 13 // 14 clocks from MAC to PHY, but sometimes there is 1 tick error
 
@@ -139,6 +141,17 @@ struct tsn_config {
 	uint32_t buffer_space;
 	timestamp_t queue_available_at[TSN_PRIO_COUNT];
 	timestamp_t total_available_at;
+};
+
+struct tx_queue_item {
+	struct sk_buff *skb;
+	dma_addr_t dma_addr;
+};
+
+struct xdma_tx_queue {
+	struct tx_queue_item queue[TX_SKBUFF_QUEUE_CAPACITY];
+	int head;
+	int tail;
 };
 
 u32 read32(void * addr);

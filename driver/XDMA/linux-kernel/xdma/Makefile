@@ -22,22 +22,22 @@ TARGET_MODULE:=xdma
 
 uname_m := $(shell uname -m)
 
-EXTRA_CFLAGS := -I$(topdir)/include $(XVC_FLAGS)
+ccflags-y := -I$(topdir)/include $(XVC_FLAGS)
 ifeq ($(uname_m),x86_64)
-	EXTRA_CFLAGS += -msse2
+	ccflags-y += -msse2
 else
-	EXTRA_CFLAGS += -march=armv8-a+simd -D__LIBXDMA_RPI__
+	ccflags-y += -march=armv8-a+simd -D__LIBXDMA_RPI__
 	KBUILD_CFLAGS := $(filter-out -mgeneral-regs-only, $(KBUILD_CFLAGS))
 	KBUILD_CFLAGS += -ffreestanding -isystem $(shell $(CC) -print-file-name=include)
 endif
 
 ifeq ($(DEBUG),1)
-	EXTRA_CFLAGS += -D__LIBXDMA_DEBUG__
+	ccflags-y += -D__LIBXDMA_DEBUG__
 endif
 ifneq ($(config_bar_num),)
-	EXTRA_CFLAGS += -DXDMA_CONFIG_BAR_NUM=$(config_bar_num)
+	ccflags-y += -DXDMA_CONFIG_BAR_NUM=$(config_bar_num)
 endif
-#EXTRA_CFLAGS += -DINTERNAL_TESTING
+#ccflags-y += -DINTERNAL_TESTING
 
 ifneq ($(KERNELRELEASE),)
 	$(TARGET_MODULE)-objs := libxdma.o xdma_cdev.o cdev_ctrl.o cdev_events.o cdev_sgdma.o cdev_xvc.o cdev_bypass.o xdma_mod.o xdma_thread.o xdma_netdev.o alinx_ptp.o alinx_arch.o tsn.o

@@ -458,10 +458,7 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
                     ts[0]
                 }
                 _ => {
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        "All TX timestamp slots are zero (HW bug?)",
-                    ));
+                    return Err(Error::other("All TX timestamp slots are zero (HW bug?)"));
                 }
             };
             return Ok(time::Timespec {

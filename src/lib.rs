@@ -457,7 +457,9 @@ pub fn get_tx_timestamp(sock: &TsnSocket) -> Result<time::Timespec, Error> {
                     eprintln!("SW TX timestamp(from driver) used");
                     ts[0]
                 }
-                _ => unreachable!(),
+                _ => {
+                    return Err(Error::other("All TX timestamp slots are zero (HW bug?)"));
+                }
             };
             return Ok(time::Timespec {
                 tv_sec: ts.tv_sec,

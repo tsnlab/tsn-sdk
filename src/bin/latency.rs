@@ -54,10 +54,16 @@ enum PerfOp {
     Sync = 3,
 }
 
+enum TstampMode {
+    Hw,
+    Sw,
+}
+
 struct ServerArgs {
     interface: String,
     vlan_id: u16,
     vlan_pri: u32,
+    tstamp: TstampMode,
 }
 
 struct ClientArgs {
@@ -71,6 +77,7 @@ struct ClientArgs {
     jitter: u64,
     oneway: bool,
     precise: bool,
+    tstamp: TstampMode,
 }
 
 fn main() {
@@ -91,6 +98,12 @@ fn main() {
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .value_parser(value_parser!(u32).range(0..=7))
                 .default_value("0")
+                .required(false),
+        )
+        .arg(
+            arg!(--tstamp <mode> "Timestamp mode (hw, sw)")
+                .value_parser(["hw", "sw"])
+                .default_value("hw")
                 .required(false),
         );
 
@@ -145,6 +158,12 @@ fn main() {
                 .value_parser(value_parser!(u32).range(0..=7))
                 .default_value("0")
                 .required(false),
+        )
+        .arg(
+            arg!(--tstamp <mode> "Timestamp mode (hw, sw)")
+                .value_parser(["hw", "sw"])
+                .default_value("hw")
+                .required(false),
         );
 
     let matched_command = Command::new("latency")
@@ -165,6 +184,10 @@ fn main() {
                     .to_string(),
                 vlan_id: *sub_matches.get_one::<u16>("vlanid").unwrap(),
                 vlan_pri: *sub_matches.get_one::<u32>("pcp").unwrap(),
+                tstamp: match sub_matches.get_one::<String>("tstamp").map(|s| s.as_str()) {
+                    Some("sw") => TstampMode::Sw,
+                    _ => TstampMode::Hw,
+                },
             };
 
             do_server(server_args)
@@ -184,6 +207,10 @@ fn main() {
                 jitter: *sub_matches.get_one("jitter").unwrap(),
                 oneway: sub_matches.is_present("oneway"),
                 precise: sub_matches.is_present("precise"),
+                tstamp: match sub_matches.get_one::<String>("tstamp").map(|s| s.as_str()) {
+                    Some("sw") => TstampMode::Sw,
+                    _ => TstampMode::Hw,
+                },
             };
 
             do_client(client_args)
@@ -225,14 +252,18 @@ fn do_server(args: ServerArgs) {
         iov_base: packet.as_mut_ptr() as *mut libc::c_void,
         iov_len: packet.len(),
     };
-    match sock.enable_timestamps(Some(&mut iov)) {
-        Ok(()) => {
-            eprintln!("Socket RX timestamp enabled");
-        }
-        Err(e) => {
-            eprintln!("Failed to set sock timestamp: {}", e);
-        }
-    };
+    if matches!(args.tstamp, TstampMode::Hw) {
+        match sock.enable_timestamps(Some(&mut iov)) {
+            Ok(()) => {
+                eprintln!("Socket RX timestamp enabled (HW)");
+            }
+            Err(e) => {
+                eprintln!("Failed to set sock timestamp: {}", e);
+            }
+        };
+    } else {
+        eprintln!("Socket RX timestamp disabled (SW mode)");
+    }
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
@@ -332,18 +363,22 @@ fn do_client(args: ClientArgs) {
         iov_base: rx_eth_buff.as_mut_ptr() as *mut libc::c_void,
         iov_len: rx_eth_buff.len(),
     };
-    let is_tx_ts_enabled = {
-        if sock
-            .enable_timestamps(if args.oneway { None } else { Some(&mut iov) })
-            .is_err()
-        {
-            eprintln!("Failed to enable timestamps");
-            false
-        } else {
-            eprintln!("Socket TX/RX timestamp enabled");
-            true
-        }
+    let is_tx_ts_enabled = if matches!(args.tstamp, TstampMode::Sw) {
+        eprintln!("Socket timestamps disabled (SW mode)");
+        false
+    } else if sock
+        .enable_timestamps(if args.oneway { None } else { Some(&mut iov) })
+        .is_err()
+    {
+        eprintln!("Failed to enable timestamps");
+        false
+    } else {
+        eprintln!("Socket TX/RX timestamp enabled (HW)");
+        true
     };
+    let mut tx_ts_failures: u32 = 0;
+    let mut use_sw_tx_fallback = false;
+    const TX_TS_FALLBACK_THRESHOLD: u32 = 3;
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
 
     for ping_id in 1..=args.count {
@@ -366,18 +401,36 @@ fn do_client(args: ClientArgs) {
             eprintln!("Failed to send packet: {}", e);
             continue;
         }
-        let mut tx_timestamp = SystemTime::now();
-        if is_tx_ts_enabled {
-            let msg_ts = sock.get_tx_timestamp();
-            match msg_ts {
+        let tx_timestamp = if is_tx_ts_enabled && !use_sw_tx_fallback {
+            match sock.get_tx_timestamp() {
                 Ok(ts) => {
-                    tx_timestamp = UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32);
+                    tx_ts_failures = 0;
+                    UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
                 }
                 Err(e) => {
-                    eprintln!("Failed to get TX timestamp: {}", e);
+                    tx_ts_failures += 1;
+                    if tx_ts_failures >= TX_TS_FALLBACK_THRESHOLD {
+                        use_sw_tx_fallback = true;
+                        eprintln!(
+                            "Failed to get TX timestamp {} times consecutively, falling back to SW timestamps",
+                            tx_ts_failures
+                        );
+                    } else {
+                        eprintln!(
+                            "Failed to get TX timestamp: {} (skipping packet {})",
+                            e, ping_id
+                        );
+                    }
+                    if use_sw_tx_fallback {
+                        SystemTime::now()
+                    } else {
+                        continue;
+                    }
                 }
             }
-        }
+        } else {
+            SystemTime::now()
+        };
         if args.oneway {
             perf_pkt.set_tv_sec(tx_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32);
             perf_pkt.set_tv_nsec(
@@ -394,8 +447,8 @@ fn do_client(args: ClientArgs) {
                 continue;
             }
 
-            // Must consume packet's timestamp
-            if is_tx_ts_enabled {
+            // Must consume packet's timestamp (skip if already in SW fallback to avoid poll timeout)
+            if is_tx_ts_enabled && !use_sw_tx_fallback {
                 let _ = sock.get_tx_timestamp();
             }
         } else {

@@ -20,8 +20,6 @@ use pnet_packet::PrimitiveValues;
 
 const NS_IN_SEC: u64 = 1_000_000_000;
 
-const VLAN_ID_PERF: u16 = 10;
-const VLAN_PRI_PERF: u32 = 3;
 const ETHERTYPE_PERF: u16 = 0x1337;
 const ETH_P_PERF: u16 = libc::ETH_P_ALL as u16; // FIXME: use ETHERTYPE_PERF
 
@@ -108,7 +106,16 @@ fn main() {
     let server_command = Command::new("server")
         .about("Server mode")
         .short_flag('s')
-        .arg(arg!(interface: -i --interface <interface> "interface to use").required(true));
+        .arg(arg!(interface: -i --interface <interface> "interface to use").required(true))
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (1-4094)")
+                .required(true),
+        )
+        .arg(
+            arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
+                .required(false)
+                .default_value("0"),
+        );
 
     let client_command = Command::new("client")
         .about("Client mode")
@@ -134,6 +141,15 @@ fn main() {
             arg!(bitrate: -b --bitrate <bitrate>)
                 .required(false)
                 .default_value("1000000000"), // 1 Gbps
+        )
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (1-4094)")
+                .required(true),
+        )
+        .arg(
+            arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
+                .required(false)
+                .default_value("0"),
         );
 
     let matched_command = Command::new("throughput")
@@ -148,7 +164,9 @@ fn main() {
     match matched_command.subcommand().unwrap() {
         ("server", server_matches) => {
             let iface = server_matches.value_of("interface").unwrap().to_string();
-            do_server(iface)
+            let vlan_id: u16 = server_matches.value_of("vlanid").unwrap().parse().unwrap();
+            let vlan_pri: u32 = server_matches.value_of("pcp").unwrap().parse().unwrap();
+            do_server(iface, vlan_id, vlan_pri)
         }
         ("client", client_matches) => {
             let iface = client_matches.value_of("interface").unwrap().to_string();
@@ -161,20 +179,22 @@ fn main() {
                 .unwrap();
             let warmup: usize = client_matches.value_of("warmup").unwrap().parse().unwrap();
             let bitrate: usize = client_matches.value_of("bitrate").unwrap().parse().unwrap();
+            let vlan_id: u16 = client_matches.value_of("vlanid").unwrap().parse().unwrap();
+            let vlan_pri: u32 = client_matches.value_of("pcp").unwrap().parse().unwrap();
 
-            do_client(iface, target, size, duration, warmup, bitrate)
+            do_client(iface, target, size, duration, warmup, bitrate, vlan_id, vlan_pri)
         }
         _ => panic!("Invalid command"),
     }
 }
 
-fn do_server(iface_name: String) {
+fn do_server(iface_name: String, vlan_id: u16, vlan_pri: u32) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
     let interface = interfaces.into_iter().find(interface_name_match).unwrap();
     let my_mac = interface.mac.unwrap();
 
-    let mut sock = match tsn::sock_open(&iface_name, VLAN_ID_PERF, VLAN_PRI_PERF, ETH_P_PERF) {
+    let mut sock = match tsn::sock_open(&iface_name, vlan_id, vlan_pri, ETH_P_PERF) {
         Ok(sock) => sock,
         Err(e) => panic!("Failed to open TSN socket: {}", e),
     };
@@ -323,6 +343,8 @@ fn do_client(
     duration: usize,
     warmup: usize,
     bitrate: usize,
+    vlan_id: u16,
+    vlan_pri: u32,
 ) {
     let interface_name_match = |iface: &NetworkInterface| iface.name == iface_name;
     let interfaces = datalink::interfaces();
@@ -331,7 +353,7 @@ fn do_client(
 
     let target: MacAddr = target.parse().expect("Invalid MAC address");
 
-    let mut sock = match tsn::sock_open(&iface_name, VLAN_ID_PERF, VLAN_PRI_PERF, ETH_P_PERF) {
+    let mut sock = match tsn::sock_open(&iface_name, vlan_id, vlan_pri, ETH_P_PERF) {
         Ok(sock) => sock,
         Err(e) => panic!("Failed to open TSN socket: {}", e),
     };

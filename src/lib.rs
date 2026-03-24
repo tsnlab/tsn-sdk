@@ -168,7 +168,7 @@ pub fn sock_open(
         sll_addr: [0, 0, 0, 0, 0, 0, 0, 0],
         sll_halen: 0,
         sll_hatype: 0,
-        sll_protocol: 0,
+        sll_protocol: socket::htons(proto),
         sll_pkttype: 0,
     };
 

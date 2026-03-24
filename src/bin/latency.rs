@@ -264,7 +264,9 @@ fn do_server(args: ServerArgs) {
     } else {
         eprintln!("Socket RX timestamp disabled (SW mode)");
     }
-    let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
+    // TX and SYNC may arrive out of order on the wire; pair by id when both sides are seen.
+    let mut pending_tx_server_rx: HashMap<u32, SystemTime> = HashMap::new();
+    let mut pending_sync_client_tx: HashMap<u32, SystemTime> = HashMap::new();
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
         let (rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
@@ -276,20 +278,21 @@ fn do_server(args: ServerArgs) {
         match PerfOp::from_u8(perf_pkt.get_op()) {
             Some(PerfOp::Tx) => {
                 let tx_id = perf_pkt.get_id();
-                timestamps.insert(tx_id, rx_timestamp);
+                if let Some(client_tx) = pending_sync_client_tx.remove(&tx_id) {
+                    print_latency(tx_id as usize, rx_timestamp, client_tx);
+                } else {
+                    pending_tx_server_rx.insert(tx_id, rx_timestamp);
+                }
             }
             Some(PerfOp::Sync) => {
                 let sync_id = perf_pkt.get_id();
-                let rx_timestamp = match timestamps.remove(&sync_id) {
-                    Some(ts) => ts,
-                    None => {
-                        eprintln!("ERROR: TX ID not found: {}", sync_id);
-                        continue;
-                    }
-                };
-                let tx_timestamp = UNIX_EPOCH
+                let client_tx = UNIX_EPOCH
                     + Duration::new(perf_pkt.get_tv_sec().into(), perf_pkt.get_tv_nsec());
-                print_latency(sync_id as usize, rx_timestamp, tx_timestamp);
+                if let Some(server_rx_tx) = pending_tx_server_rx.remove(&sync_id) {
+                    print_latency(sync_id as usize, server_rx_tx, client_tx);
+                } else {
+                    pending_sync_client_tx.insert(sync_id, client_tx);
+                }
             }
             Some(PerfOp::Ping) => {
                 perf_pkt.set_op(PerfOp::Pong as u8);

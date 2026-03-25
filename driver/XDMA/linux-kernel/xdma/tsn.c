@@ -109,8 +109,6 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		metadata->fail_policy = TSN_FAIL_POLICY_RETRY;
 	} else if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
-		// timestamps.from = tsn_config->total_available_at;
-		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 
 		if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
 			ret = false;

@@ -212,7 +212,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         if (unlikely(dma_mapping_error(&xdev->pdev->dev, dma_addr))) {
                 pr_err("dma_map_single failed\n");
                 spin_unlock_irqrestore(&priv->tx_queue_lock, flag);
-                return NETDEV_TX_OK;
+                return NETDEV_TX_BUSY;
         }
 
         if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {

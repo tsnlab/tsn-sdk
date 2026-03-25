@@ -56,7 +56,8 @@ sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
 }
 
 void alinx_set_cycle_1s_by_xdev(struct xdma_dev *xdev, u32 cycle_1s) {
-        write32(cycle_1s, xdev->bar[0] + REG_CYCLE_1S);
+        write32(0, xdev->bar[0] + REG_CYCLE_1S_HI);
+        write32(cycle_1s, xdev->bar[0] + REG_CYCLE_1S_LO);
 }
 
 void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
@@ -65,7 +66,8 @@ void alinx_set_cycle_1s(struct pci_dev *pdev, u32 cycle_1s) {
 }
 
 u32 alinx_get_cycle_1s_by_xdev(struct xdma_dev *xdev) {
-        u32 ret = read32(xdev->bar[0] + REG_CYCLE_1S);
+        (void)read32(xdev->bar[0] + REG_CYCLE_1S_HI);
+        u32 ret = read32(xdev->bar[0] + REG_CYCLE_1S_LO);
         return ret ? ret : RESERVED_CYCLE;
 }
 

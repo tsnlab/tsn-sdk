@@ -57,8 +57,9 @@ static ssize_t char_ctrl_read(struct file *fp, char __user *buf, size_t count,
 	dbg_sg("%s(@%p, count=%ld, pos=%d) value = 0x%08x\n",
 			__func__, reg, (long)count, (int)*pos, w);
 	rv = copy_to_user(buf, &w, 4);
-	if (rv)
+	if (rv) {
 		dbg_sg("Copy to userspace failed but continuing\n");
+	}
 
 	*pos += 4;
 	return 4;

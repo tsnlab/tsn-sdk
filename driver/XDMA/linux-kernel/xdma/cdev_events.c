@@ -54,8 +54,9 @@ static ssize_t char_events_read(struct file *file, char __user *buf,
 	 */
 	rv = wait_event_interruptible(user_irq->events_wq,
 			user_irq->events_irq != 0);
-	if (rv)
+	if (rv) {
 		dbg_sg("wait_event_interruptible=%d\n", rv);
+	}
 
 	/* wait_event_interruptible() was interrupted by a signal */
 	if (rv == -ERESTARTSYS)
@@ -68,8 +69,9 @@ static ssize_t char_events_read(struct file *file, char __user *buf,
 	spin_unlock_irqrestore(&user_irq->events_lock, flags);
 
 	rv = copy_to_user(buf, &events_user, 4);
-	if (rv)
+	if (rv) {
 		dbg_sg("Copy to user failed but continuing\n");
+	}
 
 	return 4;
 }

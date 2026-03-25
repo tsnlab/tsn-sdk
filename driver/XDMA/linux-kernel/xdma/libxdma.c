@@ -1392,6 +1392,80 @@ static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) 
 	}
 }
 
+bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue) {
+	return queue->head != queue->tail;
+}
+
+bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue) {
+	return queue->head == (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+}
+
+struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue) {
+	struct tx_queue_item *item = &queue->queue[queue->head];
+	queue->head = (queue->head + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+	return item;
+}
+
+void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr) {
+	struct tx_queue_item *tx_queue_item = &queue->queue[queue->tail];
+	tx_queue_item->skb = skb;
+	tx_queue_item->dma_addr = dma_addr;
+	queue->tail = (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
+}
+
+void xdma_tx_queue_work(struct work_struct *work) {
+	struct xdma_private* priv = container_of(work, struct xdma_private, tx_queue_work);
+	struct xdma_dev *xdev = priv->xdev;
+	struct tx_queue_item *tx_queue_item = NULL;
+	unsigned long flags;
+	u32 w;
+
+	if (!priv->is_running) {
+		return;
+	}
+
+	spin_lock_irqsave(&priv->tx_lock, flags);
+	if (priv->tx_skb != NULL) {
+		goto retry;
+	}
+
+	spin_lock_irqsave(&priv->tx_queue_lock, flags);
+
+	if (xdma_tx_queue_has_data(&priv->gptp_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&priv->gptp_tx_queue);
+	}
+
+	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&priv->vlan_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&priv->vlan_tx_queue);
+	}
+
+	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&priv->be_tx_queue)) {
+		tx_queue_item = xdma_tx_queue_dequeue(&priv->be_tx_queue);
+	}
+
+	spin_unlock_irqrestore(&priv->tx_queue_lock, flags);
+
+	if (tx_queue_item) {
+		priv->tx_dma_addr = tx_queue_item->dma_addr;
+		priv->tx_skb = tx_queue_item->skb;
+		tx_desc_set(priv->tx_desc, tx_queue_item->dma_addr, tx_queue_item->skb->len);
+
+		w = cpu_to_le32(PCI_DMA_L(priv->tx_bus_addr));
+		iowrite32(w, xdev->bar[1] + DESC_REG_LO);
+
+		w = cpu_to_le32(PCI_DMA_H(priv->tx_bus_addr));
+		iowrite32(w, xdev->bar[1] + DESC_REG_HI);
+		iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
+
+		iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
+	}
+
+retry:
+	spin_unlock_irqrestore(&priv->tx_lock, flags);
+
+	schedule_work(&priv->tx_queue_work);
+}
+
 /*
  * xdma_isr() - Interrupt handler
  *
@@ -1506,7 +1580,14 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		dbg_info("xdma_isr h2c");
 		engine = &xdev->engine_h2c[0];
 
+		spin_lock_irqsave(&priv->tx_lock, flag);
+
 		engine_status_read(engine, 1, 0);
+		if (priv->tx_skb == NULL) {
+			pr_err("Invalid h2c interrupt\n");
+			spin_unlock_irqrestore(&priv->tx_lock, flag);
+			return IRQ_NONE;
+		}
 
 		q = skb_get_queue_mapping(priv->tx_skb);
 
@@ -1516,6 +1597,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 		priv->tx_skb = NULL;
 
 		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+		spin_unlock_irqrestore(&priv->tx_lock, flag);
 		netif_wake_subqueue(ndev, q);
 		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
 	}
@@ -1915,8 +1997,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 		rv = pci_enable_msix(pdev, xdev->entry, req_nvec);
 #endif
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI-X mode: %d\n", rv);
+		}
 
 		xdev->msix_enabled = 1;
 
@@ -1925,8 +2008,9 @@ static int enable_msi_msix(struct xdma_dev *xdev, struct pci_dev *pdev)
 		/* enable message signalled interrupts */
 		dbg_init("pci_enable_msi()\n");
 		rv = pci_enable_msi(pdev);
-		if (rv < 0)
+		if (rv < 0) {
 			dbg_init("Couldn't enable MSI mode: %d\n", rv);
+		}
 		xdev->msi_enabled = 1;
 
 	} else {
@@ -2186,10 +2270,11 @@ static int irq_msi_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, 0, xdev->mod_name, xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2227,10 +2312,11 @@ static int irq_legacy_setup(struct xdma_dev *xdev, struct pci_dev *pdev)
 	xdev->irq_line = (int)pdev->irq;
 	rv = request_irq(pdev->irq, xdma_isr, IRQF_SHARED, xdev->mod_name,
 			 xdev);
-	if (rv)
+	if (rv) {
 		dbg_init("Couldn't use IRQ#%d, %d\n", pdev->irq, rv);
-	else
+	} else {
 		dbg_init("Using IRQ#%d with 0x%p\n", pdev->irq, xdev);
+	}
 
 	return rv;
 }
@@ -2697,12 +2783,13 @@ struct xdma_transfer *engine_cyclic_stop(struct xdma_engine *engine)
 		}
 
 		if (transfer->cyclic) {
-			if (engine->xdma_perf)
+			if (engine->xdma_perf) {
 				dbg_perf("Stopping perf transfer on %s\n",
 					 engine->name);
-			else
+			} else {
 				dbg_perf("Stopping cyclic transfer on %s\n",
 					 engine->name);
+			}
 			/* free up the buffer allocated for perf run */
 			if (engine->perf_buf_virt)
 				dma_free_coherent(&engine->xdev->pdev->dev,

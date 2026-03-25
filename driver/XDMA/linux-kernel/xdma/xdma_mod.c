@@ -441,6 +441,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
 	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
 	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
+	INIT_WORK(&priv->tx_queue_work, xdma_tx_queue_work);
 
 	ptp_data = ptp_device_init(&pdev->dev, xdev);
 	if (!ptp_data) {
@@ -460,6 +461,8 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_out;
 	}
 	channel_interrupts_enable(xdev, ~0);
+	priv->is_running = true;
+	schedule_work(&priv->tx_queue_work);
 	//netif_stop_queue(ndev);
 	return 0;
 
@@ -495,6 +498,8 @@ static void remove_one(struct pci_dev *pdev)
 	priv = netdev_priv(ndev);
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
+	priv->is_running = false;
+	cancel_work_sync(&priv->tx_queue_work);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
 	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
 	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);

@@ -267,6 +267,8 @@ fn do_server(args: ServerArgs) {
     // TX and SYNC may arrive out of order on the wire; pair by id when both sides are seen.
     let mut pending_tx_server_rx: HashMap<u32, SystemTime> = HashMap::new();
     let mut pending_sync_client_tx: HashMap<u32, SystemTime> = HashMap::new();
+    let mut last_tx_id: u32 = 0;
+    let mut last_timestamp: SystemTime = SystemTime::now();
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
         let (rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
@@ -281,14 +283,21 @@ fn do_server(args: ServerArgs) {
                 if let Some(client_tx) = pending_sync_client_tx.remove(&tx_id) {
                     print_latency(tx_id as usize, rx_timestamp, client_tx);
                 } else {
-                    pending_tx_server_rx.insert(tx_id, rx_timestamp);
+                    if last_tx_id != 0 {
+                        pending_tx_server_rx.insert(last_tx_id, last_timestamp);
+                    }
+                    last_tx_id = tx_id;
+                    last_timestamp = rx_timestamp;
                 }
             }
             Some(PerfOp::Sync) => {
                 let sync_id = perf_pkt.get_id();
                 let client_tx = UNIX_EPOCH
                     + Duration::new(perf_pkt.get_tv_sec().into(), perf_pkt.get_tv_nsec());
-                if let Some(server_rx_tx) = pending_tx_server_rx.remove(&sync_id) {
+                if sync_id == last_tx_id {
+                    print_latency(sync_id as usize, last_timestamp, client_tx);
+                    last_tx_id = 0;
+                } else if let Some(server_rx_tx) = pending_tx_server_rx.remove(&sync_id) {
                     print_latency(sync_id as usize, server_rx_tx, client_tx);
                 } else {
                     pending_sync_client_tx.insert(sync_id, client_tx);

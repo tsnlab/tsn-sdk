@@ -269,8 +269,33 @@ fn do_server(args: ServerArgs) {
     let mut pending_sync_client_tx: HashMap<u32, SystemTime> = HashMap::new();
     let mut last_tx_id: u32 = 0;
     let mut last_timestamp: SystemTime = SystemTime::now();
+
+    let ts_flags: u32 = libc::SOF_TIMESTAMPING_TX_HARDWARE
+        | libc::SOF_TIMESTAMPING_TX_SOFTWARE
+        | libc::SOF_TIMESTAMPING_RX_HARDWARE
+        | libc::SOF_TIMESTAMPING_RX_SOFTWARE
+        | libc::SOF_TIMESTAMPING_SOFTWARE
+        | libc::SOF_TIMESTAMPING_SYS_HARDWARE
+        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
+        | libc::SOF_TIMESTAMPING_OPT_CMSG;
+
     while unsafe { RUNNING } {
         // TODO: Cleanup this code
+
+        if sock.rx_timestamp_enabled {
+            // Timestamp settings might be overrided by other apps
+            // TODO: There might be a better way to do this
+            unsafe {
+                libc::setsockopt(
+                    sock.fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_TIMESTAMPING,
+                    &ts_flags as *const _ as *const libc::c_void,
+                    std::mem::size_of::<u32>().try_into().unwrap(),
+                )
+            };
+        }
+
         let (rx_timestamp, mut eth_pkt) = match recv_perf_packet(&sock, &mut packet) {
             Some(value) => value,
             None => continue,
@@ -393,6 +418,15 @@ fn do_client(args: ClientArgs) {
     const TX_TS_FALLBACK_THRESHOLD: u32 = 3;
     let mut timestamps: HashMap<u32 /* id */, SystemTime /* ts */> = HashMap::new();
 
+    let ts_flags: u32 = libc::SOF_TIMESTAMPING_TX_HARDWARE
+        | libc::SOF_TIMESTAMPING_TX_SOFTWARE
+        | libc::SOF_TIMESTAMPING_RX_HARDWARE
+        | libc::SOF_TIMESTAMPING_RX_SOFTWARE
+        | libc::SOF_TIMESTAMPING_SOFTWARE
+        | libc::SOF_TIMESTAMPING_SYS_HARDWARE
+        | libc::SOF_TIMESTAMPING_RAW_HARDWARE
+        | libc::SOF_TIMESTAMPING_OPT_CMSG;
+
     for ping_id in 1..=args.count {
         perf_pkt.set_id(ping_id as u32);
         let now;
@@ -464,6 +498,19 @@ fn do_client(args: ClientArgs) {
                 let _ = sock.get_tx_timestamp();
             }
         } else {
+            if sock.rx_timestamp_enabled {
+                // Timestamp settings might be overrided by other apps
+                // TODO: There might be a better way to do this
+                unsafe {
+                    libc::setsockopt(
+                        sock.fd,
+                        libc::SOL_SOCKET,
+                        libc::SO_TIMESTAMPING,
+                        &ts_flags as *const _ as *const libc::c_void,
+                        std::mem::size_of::<u32>().try_into().unwrap(),
+                    )
+                };
+            }
             timestamps.insert(ping_id as u32, tx_timestamp);
             let (rx_timestamp, rx_eth_pkt) = match recv_perf_packet(&sock, &mut rx_eth_buff) {
                 Some(value) => value,

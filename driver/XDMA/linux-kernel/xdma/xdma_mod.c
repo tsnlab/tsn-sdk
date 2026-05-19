@@ -423,6 +423,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	spin_lock_init(&priv->tx_lock);
 	spin_lock_init(&priv->rx_lock);
+	spin_lock_init(&xdev->sysclock_lock);
 
 	/* Set the MAC address */
 	get_mac_address(mac_addr, xdev);

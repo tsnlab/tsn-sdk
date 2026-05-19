@@ -32,6 +32,36 @@ void write32(u32 val, void * addr) {
 
 #endif
 
+#define SYSCLOCK_ERROR_DETECTION_THRESHOLD 0x80000000UL
+
+u64 read64(void * hi_addr, void * lo_addr) {
+        return ((u64)read32(hi_addr) << 32) | read32(lo_addr);
+}
+
+sysclock_t alinx_adjust_sysclock(struct xdma_dev *xdev, sysclock_t current_sysclock, sysclock_t last_sysclock, uint8_t* adjustment) {
+        unsigned long flags;
+        if (last_sysclock == 0) {
+                return current_sysclock;
+        }
+        spin_lock_irqsave(&xdev->sysclock_lock, flags);
+        if (current_sysclock + SYSCLOCK_ERROR_DETECTION_THRESHOLD < last_sysclock) {
+                pr_err("Sysclock error detected: current_sysclock=0x%08llx, last_sysclock=0x%08llx\n", current_sysclock, last_sysclock);
+                (*adjustment) += 1;
+        } else if ((*adjustment > 0) && ((current_sysclock >> 32) > (last_sysclock >> 32))) {
+                pr_err("Updating adjustment: %u %llu %llu\n", *adjustment, (current_sysclock >> 32), (last_sysclock >> 32));
+                (*adjustment) -= ((current_sysclock >> 32) - (last_sysclock >> 32)) - 1;
+        }
+        spin_unlock_irqrestore(&xdev->sysclock_lock, flags);
+        return current_sysclock + ((sysclock_t)(*adjustment) << 32);
+}
+
+sysclock_t alinx_get_adjusted_sysclock(struct xdma_dev *xdev, void* hi_addr, void* lo_addr, sysclock_t* last_sysclock, uint8_t* adjustment) {
+        sysclock_t current_sysclock = read64(hi_addr, lo_addr);
+        sysclock_t adjusted_sysclock = alinx_adjust_sysclock(xdev, current_sysclock, *last_sysclock, adjustment);
+        *last_sysclock = current_sysclock;
+        return adjusted_sysclock;
+}
+
 void alinx_set_pulse_at_by_xdev(struct xdma_dev *xdev, sysclock_t time) {
         write32((u32)(time >> 32), xdev->bar[0] + REG_NEXT_PULSE_AT_HI);
         write32((u32)time, xdev->bar[0] + REG_NEXT_PULSE_AT_LO);
@@ -43,11 +73,7 @@ void alinx_set_pulse_at(struct pci_dev *pdev, sysclock_t time) {
 }
 
 sysclock_t alinx_get_sys_clock_by_xdev(struct xdma_dev *xdev) {
-        timestamp_t clock;
-        clock = ((u64)read32(xdev->bar[0] + REG_SYS_CLOCK_HI) << 32) |
-                read32(xdev->bar[0] + REG_SYS_CLOCK_LO);
-
-        return clock;
+        return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_SYS_CLOCK_HI, xdev->bar[0] + REG_SYS_CLOCK_LO, &xdev->last_sysclock, &xdev->sysclock_adjustment);
 }
 
 sysclock_t alinx_get_sys_clock(struct pci_dev *pdev) {
@@ -79,13 +105,13 @@ u32 alinx_get_cycle_1s(struct pci_dev *pdev) {
 timestamp_t alinx_read_tx_timestamp_by_xdev(struct xdma_dev* xdev, int tx_id) {
         switch (tx_id) {
         case 1:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP1_LOW));
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP1_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP1_LOW, &xdev->last_tx_timestamp[0], &xdev->tx_timestamp_adjustment[0]);
         case 2:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP2_LOW));
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP2_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP2_LOW, &xdev->last_tx_timestamp[1], &xdev->tx_timestamp_adjustment[1]);
         case 3:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP3_LOW));
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP3_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP3_LOW, &xdev->last_tx_timestamp[2], &xdev->tx_timestamp_adjustment[2]);
         case 4:
-                return ((timestamp_t)read32(xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH) << 32 | read32(xdev->bar[0] + REG_TX_TIMESTAMP4_LOW));
+                return alinx_get_adjusted_sysclock(xdev, xdev->bar[0] + REG_TX_TIMESTAMP4_HIGH, xdev->bar[0] + REG_TX_TIMESTAMP4_LOW, &xdev->last_tx_timestamp[3], &xdev->tx_timestamp_adjustment[3]);
         default:
                 return 0;
         }

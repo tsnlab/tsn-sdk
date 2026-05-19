@@ -113,12 +113,14 @@ pub fn create_vlan(config: &Config, ifname: &str, vlan_id: u16) -> Result<i32, S
     Ok(0)
 }
 
-pub fn delete_vlan(ifname: &str, vlanid: u16) -> Result<i32, String> {
+pub fn delete_vlan(config: &Config, ifname: &str, vlanid: u16) -> Result<i32, String> {
     let name = get_vlan_name(ifname, vlanid);
     let cmd = format!("ip link del {}", name);
     run_cmd(&cmd)?;
-    let cmd = format!("tc qdisc delete dev {} root", ifname);
-    run_cmd(&cmd)?;
+    if config.tas.is_some() || config.cbs.is_some() {
+        let cmd = format!("tc qdisc delete dev {} root", ifname);
+        run_cmd(&cmd)?;
+    }
     Ok(0)
 }
 

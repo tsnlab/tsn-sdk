@@ -91,6 +91,7 @@ fn create_vlan(ifname: &str, vlanid: u16) -> Result<String, String> {
 }
 
 fn delete_vlan(ifname: &str, vlanid: u16) -> Result<i32, String> {
+    let config = get_config(ifname)?;
     let shm_name = get_shmem_name(ifname, vlanid);
     let shm_fd = get_shmem_fd(&shm_name)?;
     lock_shmem(&shm_fd)?;
@@ -111,7 +112,7 @@ fn delete_vlan(ifname: &str, vlanid: u16) -> Result<i32, String> {
         if shm_unlink(&*shm_name).is_err() {
             return Err(format!("Delete shmem fails {}", Error::last_os_error()));
         }
-        match vlan::delete_vlan(ifname, vlanid) {
+        match vlan::delete_vlan(&config, ifname, vlanid) {
             Ok(v) => Ok(v),
             Err(_) => Err(format!("Delete vlan fails {}", Error::last_os_error())),
         }

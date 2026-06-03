@@ -1341,6 +1341,7 @@ static int xpdev_qdata_realloc(struct xlnx_pci_dev *xpdev, unsigned int qmax)
 
 	if (!qmax)
 		return 0;
+    if (qmax * sizeof(struct xlnx_qdata) > UINT_MAX / 3) return -EINVAL;
 	xpdev->qdata = kzalloc(qmax * 3 * sizeof(struct xlnx_qdata),
 			       GFP_KERNEL);
 	if (!xpdev->qdata) {

@@ -442,6 +442,9 @@ static ssize_t cdev_aio_write(struct kiocb *iocb, const struct iovec *io,
 		return -ENOMEM;
 	}
 	memset(caio, 0, sizeof(struct cdev_async_io));
+
+    if ((sizeof(struct qdma_io_cb) + sizeof(struct qdma_request *)) > UINT_MAX / count)
+        return -EINVAL;
 	caio->qiocb = kzalloc(count * (sizeof(struct qdma_io_cb) +
 			sizeof(struct qdma_request *)), GFP_KERNEL);
 	if (!caio->qiocb) {
@@ -647,7 +650,7 @@ int qdma_cdev_create(struct qdma_cdev_cb *xcb, struct pci_dev *pdev,
 			&xcdev->c2h_qhndl : &xcdev->h2c_qhndl;
 	*priv_data = qhndl;
 	xcdev->dir_init = (1 << qconf->q_type);
-	strcpy(xcdev->name, qconf->name);
+    strscpy(xcdev->name, qconf->name, sizeof(xcdev->name));
 
 	xcdev->minor = minor;
 	if (xcdev->minor >= xcb->cdev_minor_cnt) {

@@ -507,6 +507,7 @@ static ssize_t cdev_aio_write(struct kiocb *iocb, const struct iovec *io,
 	caio = kmem_cache_alloc(cdev_cache, GFP_KERNEL);
 	memset(caio, 0, sizeof(struct cdev_async_io));
 
+    if (count > ULONG_MAX / sizeof(struct xdma_io_cb)) return -EINVAL;
 	caio->cb = kzalloc(count * (sizeof(struct xdma_io_cb)), GFP_KERNEL);
 
 	spin_lock_init(&caio->lock);
@@ -580,6 +581,7 @@ static ssize_t cdev_aio_read(struct kiocb *iocb, const struct iovec *io,
 	caio = kmem_cache_alloc(cdev_cache, GFP_KERNEL);
 	memset(caio, 0, sizeof(struct cdev_async_io));
 
+    if (count > ULONG_MAX / sizeof(struct xdma_io_cb)) return -EINVAL;
 	caio->cb = kzalloc(count * (sizeof(struct xdma_io_cb)), GFP_KERNEL);
 
 	spin_lock_init(&caio->lock);

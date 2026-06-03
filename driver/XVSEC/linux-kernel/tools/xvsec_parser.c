@@ -436,9 +436,7 @@ bool get_realpath(char* path, char *rpath)
 			goto CLEANUP_ABS_PATH;
 		}
 
-		snprintf(rpath, len, "%s", dirptr_abs_path);
-		strcat(rpath, "/");
-		strcat(rpath, filename);
+		snprintf(rpath, MAX_FILE_LENGTH, "%s/%s", dirptr_abs_path, filename);
 		ret = true;
 	}
 

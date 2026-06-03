@@ -133,7 +133,11 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	}
 
+
 	total_bits = xvc_obj.length;
+    if (total_bits > (UINT_MAX - 7) || (total_bits + 7) / 8 > UINT_MAX / 3)
+		return -EINVAL;
+
 	total_bytes = (total_bits + 7) >> 3;
 
 	buffer = kmalloc(total_bytes * 3, GFP_KERNEL);

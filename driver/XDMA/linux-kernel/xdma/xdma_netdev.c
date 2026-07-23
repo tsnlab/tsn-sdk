@@ -284,6 +284,48 @@ int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void 
         return 0;
 }
 
+static int xdma_validate_ts_config(struct hwtstamp_config *config) {
+        if (config->flags)
+                return -EINVAL;
+
+        switch (config->tx_type) {
+        case HWTSTAMP_TX_OFF:
+        case HWTSTAMP_TX_ON:
+                break;
+        default:
+                return -ERANGE;
+        }
+
+        switch (config->rx_filter) {
+        case HWTSTAMP_FILTER_NONE:
+                break;
+        case HWTSTAMP_FILTER_ALL:
+        case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
+        case HWTSTAMP_FILTER_PTP_V2_L2_SYNC:
+        case HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ:
+                config->rx_filter = HWTSTAMP_FILTER_ALL;
+                break;
+        default:
+                return -ERANGE;
+        }
+
+        return 0;
+}
+
+static int xdma_apply_ts_config(struct net_device *ndev, struct hwtstamp_config *config) {
+        struct xdma_private *priv = netdev_priv(ndev);
+        int ret;
+
+        ret = xdma_validate_ts_config(config);
+        if (ret)
+                return ret;
+
+        priv->tstamp_config = *config;
+
+        return 0;
+}
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 static int xdma_get_ts_config(struct net_device *ndev, struct ifreq *ifr) {
         struct xdma_private *priv = netdev_priv(ndev);
         struct hwtstamp_config *config = &priv->tstamp_config;
@@ -292,12 +334,45 @@ static int xdma_get_ts_config(struct net_device *ndev, struct ifreq *ifr) {
 }
 
 static int xdma_set_ts_config(struct net_device *ndev, struct ifreq *ifr) {
-        struct xdma_private *priv = netdev_priv(ndev);
-        struct hwtstamp_config *config = &priv->tstamp_config;
+        struct hwtstamp_config config;
+        int ret;
 
-        return copy_from_user(config, ifr->ifr_data, sizeof(*config)) ? -EFAULT : 0;
+        if (copy_from_user(&config, ifr->ifr_data, sizeof(config)))
+                return -EFAULT;
+
+        ret = xdma_apply_ts_config(ndev, &config);
+        if (ret)
+                return ret;
+
+        return copy_to_user(ifr->ifr_data, &config, sizeof(config)) ? -EFAULT : 0;
+}
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+int xdma_hwtstamp_get(struct net_device *ndev, struct kernel_hwtstamp_config *kernel_config) {
+        struct xdma_private *priv = netdev_priv(ndev);
+
+        hwtstamp_config_to_kernel(kernel_config, &priv->tstamp_config);
+
+        return 0;
 }
 
+int xdma_hwtstamp_set(struct net_device *ndev, struct kernel_hwtstamp_config *kernel_config,
+                      struct netlink_ext_ack *extack) {
+        struct hwtstamp_config config;
+        int ret;
+
+        hwtstamp_config_from_kernel(&config, kernel_config);
+
+        ret = xdma_apply_ts_config(ndev, &config);
+        if (ret)
+                return ret;
+
+        hwtstamp_config_to_kernel(kernel_config, &config);
+
+        return 0;
+}
+#else
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd) {
         switch (cmd) {
         case SIOCGHWTSTAMP:
@@ -308,6 +383,7 @@ int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd) {
                 return -EOPNOTSUPP;
         }
 }
+#endif
 
 static void do_tx_work(struct work_struct *work, u16 tstamp_id) {
         sysclock_t tx_tstamp;

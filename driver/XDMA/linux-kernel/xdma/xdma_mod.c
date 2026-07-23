@@ -225,7 +225,12 @@ static const struct net_device_ops xdma_netdev_ops = {
 	.ndo_stop = xdma_netdev_close,
 	.ndo_start_xmit = xdma_netdev_start_xmit,
 	.ndo_setup_tc = xdma_netdev_setup_tc,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+	.ndo_hwtstamp_get = xdma_hwtstamp_get,
+	.ndo_hwtstamp_set = xdma_hwtstamp_set,
+#else
 	.ndo_eth_ioctl = xdma_netdev_ioctl,
+#endif
 	.ndo_select_queue = xdma_select_queue,
 };
 

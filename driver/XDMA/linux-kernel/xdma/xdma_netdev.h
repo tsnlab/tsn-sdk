@@ -8,6 +8,7 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/net_tstamp.h>
+#include <linux/version.h>
 
 #include "xdma_mod.h"
 
@@ -169,7 +170,13 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
  */
 int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void *type_data);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+int xdma_hwtstamp_get(struct net_device *ndev, struct kernel_hwtstamp_config *config);
+int xdma_hwtstamp_set(struct net_device *ndev, struct kernel_hwtstamp_config *config,
+                      struct netlink_ext_ack *extack);
+#else
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd);
+#endif
 u16 xdma_select_queue(struct net_device *ndev, struct sk_buff *skb, struct net_device *sb_dev);
 
 void xdma_tx_work1(struct work_struct *work);

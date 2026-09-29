@@ -55,16 +55,22 @@
 #define MAGIC_CHAR	0xCCCCCCCCUL
 #define MAGIC_BITSTREAM 0xBBBBBBBBUL
 
-/* XDMA BUFFER SIZE
- * Ethernet MTU is 1500 bytes, But our board needs meta data for TX/RX
- * So we need more space for buffer and the buffer size should be changed
- * */
-/* FIXME: BUFFER_SIZE should be changed */
+/* Legacy TX admission limit. TX maps the skb itself, so this is not a DMA
+ * allocation stride. Keep it separate from the fixed C2H receive slots. */
 #define XDMA_BUFFER_SIZE (1560)
+
+/* HAT host RX contract:
+ *   se_rx_host_adapter MAX_BYTES (1600) + packed rx_metadata (10)
+ * The old 1560-byte C2H slot was smaller than the RTL's legal 1610-byte
+ * output. The driver's writeback-length check runs after DMA and therefore
+ * cannot prevent an overrun. Use a power-of-two slot with explicit margin. */
+#define XDMA_SE_RX_PAYLOAD_MAX (1600)
+#define XDMA_RX_BUFFER_SIZE    (2048)
 
 extern unsigned int desc_blen_max;
 extern unsigned int h2c_timeout;
 extern unsigned int c2h_timeout;
+extern unsigned int se_mode;	/* HAT 모드(드라이버 셰이핑/TX-TS/FRER 우회) */
 
 struct xdma_cdev {
 	unsigned long magic;		/* structure ID for sanity checks */
@@ -85,8 +91,9 @@ struct xdma_pci_dev {
 	unsigned long magic;		/* structure ID for sanity checks */
 	struct pci_dev *pdev;	/* pci device struct from probe() */
 	struct xdma_dev *xdev;
-	struct net_device *ndev;
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS];  /* network devices for each port */
 	struct ptp_device_data *ptp;
+	int num_ports;		/* number of active ports */
 	int major;		/* major number */
 	int instance;		/* instance number */
 	int user_max;

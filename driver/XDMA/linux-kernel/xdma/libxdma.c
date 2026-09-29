@@ -27,14 +27,19 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 #include <linux/ptp_classify.h>
+#include <linux/jiffies.h>
 
+#include "alinx_arch.h"
 #include "libxdma.h"
 #include "libxdma_api.h"
 #include "cdev_sgdma.h"
 #include "xdma_thread.h"
 #include "xdma_netdev.h"
 #include "tsn.h"
+#include "frer.h"
 
+
+extern unsigned int se_mode;	/* HAT 모드: BAR0=코어 APB — TSNv3 시스템 레지스터 write 우회 */
 
 #ifdef __LIBXDMA_DEBUG__
 #define dbg_info(fmt, arg...) pr_info(fmt, ##arg)
@@ -63,6 +68,27 @@ unsigned int desc_blen_max = XDMA_DESC_BLEN_MAX;
 module_param(desc_blen_max, uint, 0644);
 MODULE_PARM_DESC(desc_blen_max,
 		 "per descriptor max. buffer length, default is (1 << 28) - 1");
+
+/* HAT 모드: 운용 표준은 인터럽트 RX(0). 기본 1이면 적재 인자 누락 시 폴링으로 떨어져
+ * 약 50Mbps로 제한되는 사고가 났다 → 기본을 0으로(2026-09-24). */
+unsigned int rx_poll_mode = 0;
+module_param(rx_poll_mode, uint, 0644);
+MODULE_PARM_DESC(rx_poll_mode,
+		 "Use polling for RX (both ports), default is 0 (interrupt RX; TSN HAT standard)");
+
+/* HAT 모드. 셰이핑(TAS/CBS)/FRER/TX 타임스탬프를 TSN 코어가
+ * 담당하므로 드라이버의 스케줄링 메타 계산·TX-TS 슬롯/폴링·R-TAG 삽입을 전부
+ * 우회한다. TX 메타는 frame_length만 유효(나머지 0 = ptp_mux meta1 폐기 규약),
+ * RX 타임스탬프는 코어 헤더 유래 {sec32,ns32}로 해석. 기본 1 (이 트리는 HAT 전용). */
+unsigned int se_mode = 1;
+module_param(se_mode, uint, 0644);
+MODULE_PARM_DESC(se_mode,
+		 "TSN HAT datapath mode: bypass driver-side shaping/TX-timestamp/FRER, default 1");
+
+unsigned int rtag_duplicate_mac = 1;
+module_param(rtag_duplicate_mac, uint, 0644);
+MODULE_PARM_DESC(rtag_duplicate_mac,
+		 "The R-Tag interface uses the same MAC address as the first port, default is 1 (enabled)");
 
 #define XDMA_PERF_NUM_DESC 128
 
@@ -1347,123 +1373,82 @@ static irqreturn_t user_irq_service(int irq, struct xdma_user_irq *user_irq)
 	return IRQ_HANDLED;
 }
 
-static bool filter_rx_timestamp(struct xdma_private* priv, struct sk_buff* skb) {
-	u8 msg_type;
-	u16 eth_type;
-	uint8_t* payload;
-	struct ptp_header* ptp;
-	struct ethhdr* eth;
-	struct tsn_vlan_hdr* vlan;
-	int rx_filter = priv->tstamp_config.rx_filter;
-	if (rx_filter == HWTSTAMP_FILTER_NONE) {
-		return false;
-	} else if (rx_filter == HWTSTAMP_FILTER_ALL) {
-		return true;
-	}
+/* filter_rx_timestamp는 A2에서 RX 수확 경로(xdma_netdev.c)로 이관 */
 
-	payload = skb->data;
-	eth = (struct ethhdr*)payload;
-	payload += sizeof(*eth);
-	eth_type = ntohs(eth->h_proto);
-	if (eth_type == ETH_P_8021Q) {
-		vlan = (struct tsn_vlan_hdr*)payload;
-		eth_type = vlan->pid;
-		payload += sizeof(*vlan);
-	}
+/*
+ * A1 (HP 트랙, 2026-07-24): 구 "프레임당 엔진-start" TX 모델(xdma_tx_queue_work
+ * self-requeue busy-loop + 단일 tx_skb in-flight) 제거. TX 제출/완료는
+ * xdma_netdev.c의 디스크립터 링(xdma_tx_ring_enqueue/kick) + NAPI
+ * (xdma_tx_napi_poll)가 담당한다. §9-3 결함 2건(무조건 self-requeue,
+ * 중첩 irqsave flags 재사용)은 모델 제거로 소멸.
+ */
 
-	if (eth_type != ETH_P_1588) {
-		return false;
-	}
+/*
+ * xdma_rx_poll_work - Poll work for multi-port RX
+ *
+ * This work function monitors FIFO status on both ports and switches
+ * the RX port as needed. After switching ports, it restarts the DMA engine
+ * to trigger a transfer for data already in the FIFO (which won't generate
+ * an interrupt on its own since the port was switched after data arrived).
+ */
+#define RX_PORT_SWITCH_INTERVAL_MS 2  /* Switch ports every 2ms for fast round-robin */
 
-	ptp = (struct ptp_header*)payload;
-	msg_type = ptp->tsmt & 0xF;
-	switch (rx_filter) {
-	case HWTSTAMP_FILTER_PTP_V2_EVENT:
-	case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
-		return true;
-	case HWTSTAMP_FILTER_PTP_V2_SYNC:
-	case HWTSTAMP_FILTER_PTP_V2_L2_SYNC:
-		return msg_type == PTP_MSGTYPE_SYNC;
-	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
-	case HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ:
-		return msg_type == PTP_MSGTYPE_DELAY_REQ;
-	default:
-		return false;
-	}
-}
+void xdma_rx_poll_work(struct work_struct *work) {
+	struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
+	struct xdma_private_common* common = container_of(delayed_work, struct xdma_private_common, rx_poll_work);
+	struct xdma_dev *xdev = common->xdev;
+	int target_port;
+	unsigned long now_j = jiffies;
 
-bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue) {
-	return queue->head != queue->tail;
-}
-
-bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue) {
-	return queue->head == (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
-}
-
-struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue) {
-	struct tx_queue_item *item = &queue->queue[queue->head];
-	queue->head = (queue->head + 1) % TX_SKBUFF_QUEUE_CAPACITY;
-	return item;
-}
-
-void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr) {
-	struct tx_queue_item *tx_queue_item = &queue->queue[queue->tail];
-	tx_queue_item->skb = skb;
-	tx_queue_item->dma_addr = dma_addr;
-	queue->tail = (queue->tail + 1) % TX_SKBUFF_QUEUE_CAPACITY;
-}
-
-void xdma_tx_queue_work(struct work_struct *work) {
-	struct xdma_private* priv = container_of(work, struct xdma_private, tx_queue_work);
-	struct xdma_dev *xdev = priv->xdev;
-	struct tx_queue_item *tx_queue_item = NULL;
-	unsigned long flags;
-	u32 w;
-
-	if (!priv->is_running) {
+	if (!rx_poll_mode) {
+		/* 7층 SW 우회 유지보수: lo wrap(34.36s 주기) 추적을 위해
+		 * 다른 리더가 없어도 100ms마다 sysclock을 1회 읽는다 */
+		(void)alinx_read_sys_clock_raw(common->xdev);
+		schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
 		return;
 	}
 
-	spin_lock_irqsave(&priv->tx_lock, flags);
-	if (priv->tx_skb != NULL) {
-		goto retry;
+	bool is_running = false;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (xdev->ndev[i] && netif_running(xdev->ndev[i])) {
+			is_running = true;
+			break;
+		}
 	}
 
-	spin_lock_irqsave(&priv->tx_queue_lock, flags);
-
-	if (xdma_tx_queue_has_data(&priv->gptp_tx_queue)) {
-		tx_queue_item = xdma_tx_queue_dequeue(&priv->gptp_tx_queue);
+	if (!is_running) {
+		schedule_delayed_work(&common->rx_poll_work, msecs_to_jiffies(100));
+		return;
 	}
 
-	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&priv->vlan_tx_queue)) {
-		tx_queue_item = xdma_tx_queue_dequeue(&priv->vlan_tx_queue);
+	/* Round-robin port switching every RX_PORT_SWITCH_INTERVAL_MS */
+	{
+		unsigned long since_switch = jiffies_to_msecs(now_j - common->last_switch_jiffies);
+		if (since_switch >= RX_PORT_SWITCH_INTERVAL_MS) {
+			target_port = (common->rx_port == 0) ? 1 : 0;
+			common->last_switch_jiffies = now_j;
+		} else {
+			target_port = common->rx_port;
+		}
 	}
 
-	if (tx_queue_item == NULL && xdma_tx_queue_has_data(&priv->be_tx_queue)) {
-		tx_queue_item = xdma_tx_queue_dequeue(&priv->be_tx_queue);
+	/*
+	 * Hold tx_lock while switching ports so we don't clobber the TX port
+	 * that xdma_tx_queue_work set up for an in-flight DMA transfer.
+	 * If a TX is in progress, only update the RX port.
+	 */
+	{
+		unsigned long flags;
+		int safe_tx_port;
+
+		spin_lock_irqsave(&common->tx_lock, flags);
+		safe_tx_port = common->tx_port;
+		xdma_swap_ports(xdev, safe_tx_port, target_port);
+		spin_unlock_irqrestore(&common->tx_lock, flags);
 	}
 
-	spin_unlock_irqrestore(&priv->tx_queue_lock, flags);
-
-	if (tx_queue_item) {
-		priv->tx_dma_addr = tx_queue_item->dma_addr;
-		priv->tx_skb = tx_queue_item->skb;
-		tx_desc_set(priv->tx_desc, tx_queue_item->dma_addr, tx_queue_item->skb->len);
-
-		w = cpu_to_le32(PCI_DMA_L(priv->tx_bus_addr));
-		iowrite32(w, xdev->bar[1] + DESC_REG_LO);
-
-		w = cpu_to_le32(PCI_DMA_H(priv->tx_bus_addr));
-		iowrite32(w, xdev->bar[1] + DESC_REG_HI);
-		iowrite32(0, xdev->bar[1] + DESC_REG_HI + 4);
-
-		iowrite32(DMA_ENGINE_START, &priv->tx_engine->regs->control);
-	}
-
-retry:
-	spin_unlock_irqrestore(&priv->tx_lock, flags);
-
-	schedule_work(&priv->tx_queue_work);
+	/* Reschedule poll work */
+	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 }
 
 /*
@@ -1475,17 +1460,11 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 {
 	u32 ch_irq;
 	u32 mask;
-	u16 q;
-	int skb_len;
-	unsigned long flag;
 	struct interrupt_regs *irq_regs;
 	struct net_device *ndev;
-	struct sk_buff *skb;
 	struct xdma_dev *xdev;
-	struct xdma_engine *engine;
 	struct xdma_private *priv;
-	struct xdma_result *result;
-	struct rx_buffer *rx_buffer;
+	struct xdma_private_common *common;
 
 	dbg_irq("(irq=%d, dev 0x%p) <<<< ISR.\n", irq, dev_id);
 	if (!dev_id) {
@@ -1504,103 +1483,59 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 	irq_regs = (struct interrupt_regs *)(xdev->bar[xdev->config_bar_idx] +
 					     XDMA_OFS_INT_CTRL);
 
-	/* read channel interrupt requests */
-	ch_irq = read_register(&irq_regs->channel_int_request);
-	dbg_irq("ch_irq = 0x%08x\n", ch_irq);
-
-	/*
-	 * disable all interrupts that fired; these are re-enabled individually
-	 * after the causing module has been fully serviced.
-	 */
-	if (ch_irq)
-		channel_interrupts_disable(xdev, ch_irq);
-
-	ndev = xdev->ndev;
+	ndev = xdev->ndev[0];
 	if (!ndev) {
 		pr_err("Invalid net device\n");
 		return IRQ_NONE;
 	}
 
 	priv = netdev_priv(ndev);
-	mask = ch_irq & xdev->mask_irq_c2h;
-	if (mask) {
-		dbg_info("xdma_isr c2h");
-		engine = &xdev->engine_c2h[0];
-		result = priv->res;
-		rx_buffer = (struct rx_buffer*)priv->rx_buffer;
+	common = priv->common;
 
-#ifdef __LIBXDMA_DEBUG__
-		assert_eq(rx_buffer->metadata.frame_length, result->length - RX_METADATA_SIZE);
-#endif
-		spin_lock_irqsave(&priv->rx_lock, flag);
-		engine_status_read(engine, 1, 0);
-		// skb_len = rx_buffer->metadata.frame_length - CRC_LEN;
-		skb_len = result->length - RX_METADATA_SIZE - CRC_LEN;
-		if (skb_len < 0) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Invalid skb_len\n");
-			return IRQ_NONE;
-		}
-		skb = dev_alloc_skb(skb_len);
-		if (!skb) {
-			iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-			channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-			iowrite32(DMA_ENGINE_START, &engine->regs->control);
-			spin_unlock_irqrestore(&priv->rx_lock, flag);
-			pr_err("Failed to allocate skb\n");
-			return IRQ_NONE;
-		}
-		memcpy(
-			skb_put(skb, skb_len),
-			priv->rx_buffer + RX_METADATA_SIZE,
-			skb_len);
-		if (filter_rx_timestamp(priv, skb)) {
-			skb_hwtstamps(skb)->hwtstamp = alinx_get_rx_timestamp(xdev->pdev, rx_buffer->metadata.timestamp);
-		}
-		skb->dev = ndev;
-		skb->protocol = eth_type_trans(skb, ndev);
+	/* 단일 MSI 벡터 edge-유실 방어(2026-08-10 NIC x86 브링업 중 추가):
+	 * request를 한 번만 읽으면, 읽기 직후 다른 엔진이 assert했을 때
+	 * aggregate(pending&enabled)가 계속 high로 남아 edge MSI가 재발화하지
+	 * 않을 수 있다(이벤트 유실 위험). request가 0이 될 때까지 재독해 창을
+	 * 닫는다 — 서비스분이 전부 disable되면 aggregate가 0으로 떨어져, 이후
+	 * assert는 0->1 전이로 새 MSI를 만든다.
+	 * 주의(정직 기록): 당시 조사하던 x86 TCP 스톨의 실제 원인은 이 레이스가
+	 * 아니라 iperf3 버전 비호환(3.16↔3.18)으로 판명됨. 이 루프는 공유 벡터
+	 * 구성의 일반 방어로 유지. */
+	do {
+		/* read channel interrupt requests (pending & enabled) */
+		ch_irq = read_register(&irq_regs->channel_int_request);
+		dbg_irq("ch_irq = 0x%08x\n", ch_irq);
+		if (!ch_irq)
+			break;
 
-		/* Transfer the skb to the Linux network stack */
-		netif_rx(skb);
+		/*
+		 * disable all interrupts that fired; these are re-enabled
+		 * individually after the causing module has been fully
+		 * serviced (NAPI poll 끝).
+		 */
+		channel_interrupts_disable(xdev, ch_irq);
 
-		/* Stop the engine */
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-
-		/* Start the engine */
-		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-		iowrite32(DMA_ENGINE_START, &engine->regs->control);
-		spin_unlock_irqrestore(&priv->rx_lock, flag);
-	}
-
-	mask = ch_irq & xdev->mask_irq_h2c;
-	if (mask) {
-		dbg_info("xdma_isr h2c");
-		engine = &xdev->engine_h2c[0];
-
-		spin_lock_irqsave(&priv->tx_lock, flag);
-
-		engine_status_read(engine, 1, 0);
-		if (priv->tx_skb == NULL) {
-			pr_err("Invalid h2c interrupt\n");
-			spin_unlock_irqrestore(&priv->tx_lock, flag);
-			return IRQ_NONE;
+		mask = ch_irq & xdev->mask_irq_c2h;
+		if (mask) {
+			dbg_info("xdma_isr c2h");
+			/* A2: RX 수확은 NAPI가 배치 수행. C2H 채널 IRQ는 위에서
+			 * disable된 상태로 두고, NAPI poll 끝에서 재활성화한다.
+			 * (구 모델: 하드IRQ 안에서 skb 할당 + 1.5KB memcpy + 엔진
+			 *  STOP/재장전/START를 프레임마다 수행 -> 960M에서 11.6% 유실) */
+			xdma_rx_completion_irq(common);
 		}
 
-		q = skb_get_queue_mapping(priv->tx_skb);
+		mask = ch_irq & xdev->mask_irq_h2c;
+		if (mask) {
+			dbg_info("xdma_isr h2c");
+			/* A1: 완료 처리는 NAPI가 배치 수행. H2C 채널 IRQ는 위에서
+			 * disable된 상태로 두고, NAPI poll 끝에서 재활성화한다.
+			 * (구 코드의 "Invalid h2c interrupt" 경로는 IRQ 재활성화 없이
+			 * 리턴해 완료 IRQ가 영구 소실되는 잠재 웨지였다 — 모델 교체로 소멸) */
+			xdma_tx_completion_irq(common);
+		}
+	} while (1);
 
-		/* Free last resource */
-		dma_unmap_single(&xdev->pdev->dev, priv->tx_dma_addr, priv->tx_skb->len, DMA_TO_DEVICE);
-		dev_kfree_skb_any(priv->tx_skb);
-		priv->tx_skb = NULL;
-
-		iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
-		spin_unlock_irqrestore(&priv->tx_lock, flag);
-		netif_wake_subqueue(ndev, q);
-		channel_interrupts_enable(engine->xdev, engine->irq_bitmask);
-	}
 	xdev->irq_count++;
 	return IRQ_HANDLED;
 }
@@ -4699,7 +4634,9 @@ void *xdma_device_open(const char *mname, struct pci_dev *pdev, int *user_max,
 	xdev->user_max = *user_max;
 	xdev->h2c_channel_max = *h2c_channel_max;
 	xdev->c2h_channel_max = *c2h_channel_max;
-	xdev->ndev = NULL;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		xdev->ndev[i] = NULL;
+	}
 
 	xdma_device_flag_set(xdev, XDEV_FLAG_OFFLINE);
 
@@ -4820,6 +4757,8 @@ void xdma_device_close(struct pci_dev *pdev, void *dev_hndl)
 		dbg_sg("pci_dev(0x%lx) != pdev(0x%lx)\n",
 		       (unsigned long)xdev->pdev, (unsigned long)pdev);
 	}
+
+	tsn_cleanup_configs(pdev);
 
 	channel_interrupts_disable(xdev, ~0);
 	user_interrupts_disable(xdev, ~0);
@@ -5051,4 +4990,77 @@ int engine_addrmode_set(struct xdma_engine *engine, unsigned long arg)
 	engine_alignments(engine);
 
 	return rv;
+}
+
+void xdma_stop_all_queues(struct xdma_dev *xdev) {
+    for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		netif_tx_stop_all_queues(xdev->ndev[i]);
+    }
+	atomic_set(&xdev->tx_queues_stopped, 1);
+}
+
+/* A3b (2026-07-27): BE 경로가 매 프레임 start_all을 호출해 전 포트 큐 wake를
+ * 반복(ftrace 실측 netif_tx_wake_queue x10+ = ~2us/프레임 낭비 — 이미 깨어있는
+ * 큐에 idempotent wake). stop이 실제로 있었을 때만 wake하도록 플래그 게이트.
+ * 레이스는 무해: cmpxchg 후 stop이 끼어도 플래그/큐 상태는 일관 유지. */
+void xdma_start_all_queues(struct xdma_dev *xdev) {
+	if (atomic_cmpxchg(&xdev->tx_queues_stopped, 1, 0) != 1)
+		return;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		netif_tx_wake_all_queues(xdev->ndev[i]);
+	}
+}
+
+static uint32_t xdma_convert_port_to_bits(int tx_port, int rx_port) {
+	uint32_t ret = 0;
+	switch (tx_port) {
+		case 0:
+			ret |= TSN_TX_PORT0;
+			break;
+		case 1:
+			ret |= TSN_TX_PORT1;
+			break;
+		default:
+			ret |= TSN_TX_PORT0;
+			break;
+	}
+	switch (rx_port) {
+		case 0:
+			ret |= TSN_RX_PORT0;
+			break;
+		case 1:
+			ret |= TSN_RX_PORT1;
+			break;
+		default:
+			ret |= TSN_RX_PORT0;
+			break;
+	}
+	return ret;
+}
+
+void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port) {
+	struct xdma_private *priv = netdev_priv(xdev->ndev[0]);
+	struct xdma_private_common *common = priv->common;
+	unsigned long flags;
+
+	spin_lock_irqsave(&common->rx_lock, flags);
+
+	if (common->tx_port == tx_port && common->rx_port == rx_port) {
+		spin_unlock_irqrestore(&common->rx_lock, flags);
+		return;
+	}
+
+	/* A2: RX 엔진은 free-running 링이라 재시작 불필요 — 먹스만 전환.
+	 * (구 모델은 프레임당 STOPPED 단일 desc라 전환 후 재시동이 필요했다.
+	 *  링에서 재시동하면 실행 중 체인을 처음부터 다시 돌아 중복 수신 발생.)
+	 * se_mode: 0x04 = 코어 lookup 제어(bypass 비트). RX 폴링의 라운드로빈 먹스
+	 * 전환이 이 레지스터를 주기 재기록해 스위칭을 상시 바이패스시켰음(2026-08-03
+	 * RX 블랙홀 진범). HAT 코어에는 RX 먹스 자체가 없다 — write 금지, 캐시만 갱신. */
+	if (!se_mode)
+		iowrite32(TSN_ENABLE | xdma_convert_port_to_bits(tx_port, rx_port),
+				xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	common->tx_port = tx_port;
+	common->rx_port = rx_port;
+
+	spin_unlock_irqrestore(&common->rx_lock, flags);
 }

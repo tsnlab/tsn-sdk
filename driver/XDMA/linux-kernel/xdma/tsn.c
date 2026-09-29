@@ -1,11 +1,13 @@
 #include <linux/if_ether.h>
 #include <linux/string.h>
+#include <linux/slab.h>
 
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
 #include "xdma_netdev.h"
 #include "libxdma.h"
 #include "tsn.h"
+#include "frer.h"
 
 #define NS_IN_1S 1000000000
 
@@ -70,7 +72,7 @@ static inline sysclock_t tsn_timestamp_to_sysclock(struct pci_dev* pdev, timesta
  * @param tx_buf: The frame to be sent
  * @return: true if the frame reserves timestamps, false is for drop
  */
-bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* skb) {
+bool tsn_fill_metadata(struct xdma_dev* xdev, timestamp_t now, struct sk_buff* skb) {
 	uint8_t vlan_prio, tc_id;
 	uint64_t duration_ns;
 	bool is_gptp, consider_delay;
@@ -79,13 +81,14 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	struct timestamps timestamps;
 	struct tx_buffer* tx_buf = (struct tx_buffer*)skb->data;
 	struct tx_metadata* metadata = (struct tx_metadata*)&tx_buf->metadata;
-	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	struct pci_dev* pdev = xdev->pdev;
 	struct tsn_config* tsn_config = &xdev->tsn_config;
-	struct xdma_private* priv = netdev_priv(xdev->ndev);
+	struct xdma_private* priv = netdev_priv(xdev->ndev[0]);  // TODO: TSN config per port
+	struct xdma_private_common* common = priv->common;
 	bool ret = true;
 
 	vlan_prio = tsn_get_vlan_prio(tsn_config, skb);
-	tc_id = tsn_get_mqprio_tc(xdev->ndev, vlan_prio);
+	tc_id = tsn_get_mqprio_tc(priv->ndev, vlan_prio);
 	is_gptp = is_gptp_packet(tx_buf->data);
 
 	if (is_gptp) {
@@ -109,9 +112,11 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		metadata->fail_policy = TSN_FAIL_POLICY_RETRY;
 	} else if (tsn_config->qbv.enabled == false && tsn_config->qav[tc_id].enabled == false) {
 		// Don't care. Just fill in the metadata
+		// timestamps.from = tsn_config->total_available_at;
+		// timestamps.to = timestamps.from + _DEFAULT_TO_MARGIN_;
 
 		if (!is_buffer_available(xdev, BE_QUEUE_SIZE_PAD)) {
-			ret = false;
+			ret = false; // Don't drop the frame, wait for the queue to be available
 		}
 		timestamps.from = from;
 		timestamps.to = TSN_ALWAYS_OPEN(from);
@@ -136,6 +141,16 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 		}
 
 		get_timestamps(&timestamps, tsn_config, from, tc_id, metadata->frame_length, consider_delay);
+		/* Qav 창 교정 (2026-07-25 실측): qbv 비활성 시 get_timestamps는
+		 * to=ALWAYS_OPEN을 주는데, FPGA 스케줄러의 ALWAYS_OPEN 특례(HP-fix L4b,
+		 * Frame_Scheduler.v S_IDLE)는 from 대기 없이 즉시 유효 처리라 Qav의
+		 * from 지연이 와이어에 반영되지 않는다(offered 400M -> 400M 그대로).
+		 * qav 활성 tc는 유한 창 [from, from+100ms]로 바꿔 from 게이팅을 강제. */
+		if (tsn_config->qav[tc_id].enabled && tsn_config->qbv.enabled == false) {
+			timestamps.to = timestamps.from + 100000000ULL;
+			if (consider_delay)
+				timestamps.delay_to = timestamps.delay_from + 100000000ULL;
+		}
 		metadata->fail_policy = consider_delay ? TSN_FAIL_POLICY_RETRY : TSN_FAIL_POLICY_DROP;
 	}
 
@@ -152,12 +167,14 @@ bool tsn_fill_metadata(struct pci_dev* pdev, timestamp_t now, struct sk_buff* sk
 	metadata->delay_to.tick = tsn_timestamp_to_sysclock(pdev, timestamps.delay_to);
 	metadata->delay_to.priority = queue_prio;
 
-	if (priv->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
+	if (common->tstamp_config.tx_type != HWTSTAMP_TX_ON) {
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_NONE;
 	} else if (is_gptp) {
 		metadata->timestamp_id = TSN_TIMESTAMP_ID_GPTP;
 	} else {
-		metadata->timestamp_id = TSN_TIMESTAMP_ID_NORMAL;
+		int idx = atomic_inc_return(&common->next_normal_tstamp_id);
+		metadata->timestamp_id = TSN_TIMESTAMP_ID_NORMAL +
+			(idx % (TSN_TIMESTAMP_ID_MAX - TSN_TIMESTAMP_ID_NORMAL));
 	}
 
 	decrease_buffer_space(xdev);
@@ -197,12 +214,58 @@ void tsn_init_configs(struct pci_dev* pdev) {
 		config->qav[0].send_slope = -90;
 	}
 
+	// Initialize FRER (802.1CB) configuration
+	config->frer = kzalloc(sizeof(struct frer_config), GFP_KERNEL);
+	if (config->frer) {
+		frer_init(config->frer);
+		/* HP-fix L2 (2026-07-24): probe 시 무조건 enable 금지.
+		 * enabled=true면 OS 배경트래픽(DHCP 등)이 FRER netdev로 나갈 때
+		 * R-TAG 복제되어 미배선 포트(TEMAC) FIFO에 축적 -> almost-full busy
+		 * 영구 고착 -> 스케줄러 전면 봉쇄(모드 A hang의 1순위 트리거, ILA 실측).
+		 * FRER는 ioctl(SIOCDEVPRIVATE stream add)로 명시 활성화할 때만 켠다. */
+		config->frer->enabled = false;
+		pr_info("FRER (802.1CB) initialized (disabled until ioctl)\n");
+	} else {
+		pr_warn("Failed to allocate FRER configuration\n");
+	}
+
 	bake_qos_config(config);
 }
 
+void tsn_cleanup_configs(struct pci_dev* pdev) {
+	struct xdma_dev* xdev = xdev_find_by_pdev(pdev);
+	struct tsn_config* config = &xdev->tsn_config;
+
+	if (config->frer) {
+		frer_cleanup(config->frer);
+		kfree(config->frer);
+		config->frer = NULL;
+		pr_info("FRER (802.1CB) cleanup complete\n");
+	}
+}
+
 static void bake_qos_config(struct tsn_config* config) {
-	int slot_id, tc_id; // Iterators
+	int slot_id, tc_id;
 	struct qbv_baked_config* baked;
+	// if (config->qbv.enabled == false) {
+	// 	// TODO: remove this when throughput issue without QoS gets resolved
+	// 	for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 		if (config->qav[tc_id].enabled) {
+	// 			qav_disabled = false;
+	// 			break;
+	// 		}
+	// 	}
+
+	// 	if (qav_disabled) {
+	// 		config->qbv.enabled = true;
+	// 		config->qbv.start = 0;
+	// 		config->qbv.slot_count = 1;
+	// 		config->qbv.slots[0].duration_ns = 1000000000; // 1s
+	// 		for (tc_id = 0; tc_id < TC_COUNT; tc_id++) {
+	// 			config->qbv.slots[0].opened_prios[tc_id] = true;
+	// 		}
+	// 	}
+	// }
 
 	baked = &config->qbv_baked;
 	memset(baked, 0, sizeof(struct qbv_baked_config));
@@ -412,15 +475,25 @@ static bool get_timestamps(struct timestamps* timestamps, const struct tsn_confi
 static void update_buffer(struct xdma_dev* xdev, uint32_t min_space) {
 	uint32_t threshold = min_space > HW_QUEUE_SIZE_PAD ? min_space : HW_QUEUE_SIZE_PAD;
 	if (xdev->tsn_config.buffer_space <= threshold) {
-		u64 total_pkts = alinx_get_total_new_entry_by_xdev(xdev);
-		u64 sent_pkts = alinx_get_total_valid_entry_by_xdev(xdev);
-		u64 dropped_pkts = alinx_get_total_drop_entry_by_xdev(xdev);
-		xdev->tsn_config.buffer_space = HW_QUEUE_SIZE - (u32)(total_pkts - sent_pkts - dropped_pkts);
+		u32 hw_free = (u32)alinx_get_fifo_cnt_by_xdev(xdev);
+		/* Track B (2026-07-08): HW 여유 슬롯은 주소FIFO 깊이(HW_QUEUE_SIZE)를
+		 * 넘을 수 없다. one-read-lag/노이즈로 튄 값이 미러를 부풀리면 이후
+		 * 갱신 게이트(<=threshold)를 못 넘어 flow-control이 죽으므로 클램프. */
+		if (hw_free > HW_QUEUE_SIZE)
+			hw_free = HW_QUEUE_SIZE;
+		xdev->tsn_config.buffer_space = hw_free;
 	}
 }
 
 static void decrease_buffer_space(struct xdma_dev* xdev) {
-	xdev->tsn_config.buffer_space -= 1;
+	/* Track B (2026-07-08) 근본수정: uint32 언더플로 방지.
+	 * buffer_space가 0에서 한 번 더 감소하면 0xFFFFFFFF로 랩되고, 그러면
+	 * update_buffer의 갱신 게이트(buffer_space<=threshold)가 영원히 거짓이 되어
+	 * HW 재실측이 멈춘다 → is_buffer_available이 항상 참 → flow-control 영구정지 →
+	 * 꽉 찬 FBW 주소FIFO에 무한 DMA → 포인터 오버런 → 재프로그램 전까지 영구오염.
+	 * 0에서 멈추면 게이트가 계속 열려 매 프레임 HW를 재실측하고 백프레셔가 살아있다. */
+	if (xdev->tsn_config.buffer_space > 0)
+		xdev->tsn_config.buffer_space -= 1;
 }
 
 static bool is_buffer_available(struct xdma_dev* xdev, uint32_t min_space) {
@@ -443,7 +516,7 @@ int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload)
 		return -EINVAL;
 	}
 
-	if ((ret = netdev_set_num_tc(xdev->ndev, qopt.num_tc)) < 0) {
+	if ((ret = netdev_set_num_tc(xdev->ndev[0], qopt.num_tc)) < 0) {
 		pr_err("Failed to set num_tc\n");
 		return ret;
 	}
@@ -454,13 +527,13 @@ int tsn_set_mqprio(struct pci_dev* pdev, struct tc_mqprio_qopt_offload* offload)
 	}
 
 	for (i = 0; i < qopt.num_tc; i++) {
-		if (netdev_set_tc_queue(xdev->ndev, i, qopt.count[i], qopt.offset[i]) < 0) {
+		if (netdev_set_tc_queue(xdev->ndev[0], i, qopt.count[i], qopt.offset[i]) < 0) {
 			pr_warn("Failed to set tc queue: tc [%u], queue [%u@%u]\n", i, qopt.count[i], qopt.offset[i]);
 		}
 	}
 
 	for (i = 0; i < TC_QOPT_BITMASK; i++) {
-		if (netdev_set_prio_tc_map(xdev->ndev, i, qopt.prio_tc_map[i]) < 0) {
+		if (netdev_set_prio_tc_map(xdev->ndev[0], i, qopt.prio_tc_map[i]) < 0) {
 			pr_warn("Failed to set tc map: prio [%u], tc [%d]\n", i, qopt.prio_tc_map[i]);
 		}
 	}
@@ -480,6 +553,13 @@ int tsn_set_qav(struct pci_dev* pdev, struct tc_cbs_qopt_offload* offload) {
 	config->qav[offload->queue].lo_credit = offload->locredit * 1000;
 	config->qav[offload->queue].idle_slope = offload->idleslope / 1000;
 	config->qav[offload->queue].send_slope = offload->sendslope / 1000;
+
+	pr_info("tsn_set_qav: queue=%d enable=%d idle=%d send=%d hi=%d lo=%d\n",
+		offload->queue, offload->enable,
+		config->qav[offload->queue].idle_slope,
+		config->qav[offload->queue].send_slope,
+		config->qav[offload->queue].hi_credit,
+		config->qav[offload->queue].lo_credit);
 
 	bake_qos_config(config);
 

@@ -251,16 +251,15 @@
 #define dbg_init	pr_err
 #define dbg_desc	pr_err
 #else
-#define empty_func(...) do {} while (0)
 /* disable debugging */
-#define dbg_io      empty_func
-#define dbg_fops    empty_func
-#define dbg_perf    empty_func
-#define dbg_sg      empty_func
-#define dbg_tfr     empty_func
-#define dbg_irq     empty_func
-#define dbg_init    empty_func
-#define dbg_desc    empty_func
+#define dbg_io(...)
+#define dbg_fops(...)
+#define dbg_perf(...)
+#define dbg_sg(...)
+#define dbg_tfr(...)
+#define dbg_irq(...)
+#define dbg_init(...)
+#define dbg_desc(...)
 #endif
 
 /* SECTION: Enum definitions */
@@ -595,7 +594,7 @@ struct xdma_dev {
 
 	unsigned long magic;		/* structure ID for sanity checks */
 	struct pci_dev *pdev;	/* pci device struct from probe() */
-	struct net_device *ndev; /* net device struct from probe() */
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS]; /* net device struct from probe() */
 	struct tsn_config tsn_config;
 	int idx;		/* dev index */
 
@@ -637,6 +636,33 @@ struct xdma_dev {
 	/* SD_Accel specific */
 	enum dev_capabilities capabilities;
 	u64 feature_id;
+
+	sysclock_t last_sysclock;
+
+	/*
+	 * 7층(도메인별 System_Counter FSM 땜질) SW 우회 상태 (2026-07-08):
+	 * FPGA hi 워드는 wrap당 1회 갱신 FSM이 트리거를 놓치면 34.36초간 오염.
+	 * -> hi를 FPGA에서 신뢰하지 않고 SW가 lo wrap을 세어 유지한다.
+	 * alinx_reg_lock 안에서만 갱신. 시드 hi 오염은 상수 시프트(PHC offset 흡수).
+	 */
+	u32 sw_hi;
+	u32 sw_last_lo;
+	int sw_hi_valid;
+
+	/*
+	 * A3 (2026-07-26): sysclock 캐시+외삽. TX 핫패스의 프레임당 BAR read
+	 * 3회(prime+hi+lo, 회당 ~1.5-2us 비포스티드 PCIe 왕복)가 84kpps 병목의
+	 * 주범(pktgen 실측 11.8us/프레임, IRQ/프레임=1). 실제 read 시점의
+	 * (sysclock, ktime_raw)를 스탬프해 두고, 핫패스는 8ns/tick으로 외삽한다.
+	 * alinx_reg_lock 안에서만 갱신.
+	 */
+	sysclock_t cache_sysclock;
+	u64 cache_kt_ns;
+	int cache_valid;
+
+	/* A3b: 큐 wake 스톰 게이트 — stop이 실제 있었을 때만 start_all이 wake
+	 * (BE 경로가 매 프레임 재-wake 호출: ftrace 실측 ~2us/프레임 낭비) */
+	atomic_t tx_queues_stopped;
 };
 
 static inline int xdma_device_flag_check(struct xdma_dev *xdev, unsigned int f)
@@ -710,10 +736,11 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 
 void channel_interrupts_disable(struct xdma_dev *xdev, u32 mask);
 void channel_interrupts_enable(struct xdma_dev *xdev, u32 mask);
+void xdma_rx_poll_work(struct work_struct *work);
 
-bool xdma_tx_queue_has_data(struct xdma_tx_queue *queue);
-bool xdma_tx_queue_is_full(struct xdma_tx_queue *queue);
-struct tx_queue_item* xdma_tx_queue_dequeue(struct xdma_tx_queue *queue);
-void xdma_tx_queue_enqueue(struct xdma_tx_queue *queue, struct sk_buff *skb, dma_addr_t dma_addr);
-void xdma_tx_queue_work(struct work_struct *work);
+void xdma_stop_all_queues(struct xdma_dev *xdev);
+void xdma_start_all_queues(struct xdma_dev *xdev);
+void xdma_swap_ports(struct xdma_dev *xdev, int tx_port, int rx_port);
+
+/* A1: 구 SW TX 큐/워크 모델 제거 — TX는 xdma_netdev.c의 디스크립터 링 + NAPI */
 #endif /* XDMA_LIB_H */

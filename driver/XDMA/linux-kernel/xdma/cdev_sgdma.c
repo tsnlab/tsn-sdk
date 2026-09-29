@@ -38,11 +38,11 @@
 /* Module Parameters */
 unsigned int h2c_timeout = 1;
 module_param(h2c_timeout, uint, 0644);
-MODULE_PARM_DESC(h2c_timeout, "H2C sgdma timeout in seconds, default is 10 sec.");
+MODULE_PARM_DESC(h2c_timeout, "H2C sgdma timeout in seconds, default is 1 sec.");
 
 unsigned int c2h_timeout = 1;
 module_param(c2h_timeout, uint, 0644);
-MODULE_PARM_DESC(c2h_timeout, "C2H sgdma timeout in seconds, default is 10 sec.");
+MODULE_PARM_DESC(c2h_timeout, "C2H sgdma timeout in seconds, default is 1 sec.");
 
 extern struct kmem_cache *cdev_cache;
 static void char_sgdma_unmap_user_buf(struct xdma_io_cb *cb, bool write);

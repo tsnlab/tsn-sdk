@@ -32,9 +32,31 @@
 #include "xdma_netdev.h"
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
+#include "frer.h"
 
 #define DRV_MODULE_NAME		"xdma"
 #define DRV_MODULE_DESC		"Xilinx XDMA Reference Driver"
+
+/* build43+: read-only AXI GPIO in the existing 1 MiB user BAR.
+ * channel 1 DATA = adapter drop, channel 2 DATA = adapter emitted data. */
+#define SE_RXSTATS_GPIO_OFFSET	0x00080000
+#define SE_RXSTATS_DROP_OFFSET	(SE_RXSTATS_GPIO_OFFSET + 0x0)
+#define SE_RXSTATS_DATA_OFFSET	(SE_RXSTATS_GPIO_OFFSET + 0x8)
+
+#define SE_LLEMAC_MACADR_H_OFF	0x08
+#define SE_LLEMAC_MAC_CTRL_OFF	0x0C
+#define SE_LLEMAC_PMAC_OFF	0x200
+#define SE_LLEMAC_PROMISC	BIT(16)
+#define SE_LLEMAC_RX_EN		BIT(1)
+#define SE_LLEMAC_TX_EN		BIT(2)
+
+/* The 2048-byte C2H slot fixed the host overrun seen with full pMAC traffic.
+ * Keep full FPE (TX fragmentation + RX reassembly) as the production default;
+ * pmac_rx_enable=0 remains available for controlled A/B isolation. */
+static unsigned int pmac_rx_enable = 1;
+module_param(pmac_rx_enable, uint, 0644);
+MODULE_PARM_DESC(pmac_rx_enable,
+	"Enable pMAC RX/reassembly path in HAT mode (default 1=full FPE; 0=TX-only A/B)");
 
 static char version[] =
 	DRV_MODULE_DESC " " DRV_MODULE_NAME " v" DRV_MODULE_VERSION "\n";
@@ -92,7 +114,8 @@ static uint64_t hash(unsigned long hostid, unsigned long num) {
 	return hash;
 }
 
-static void get_mac_address(char* mac_addr, struct xdma_dev *xdev) {
+extern unsigned int rtag_duplicate_mac;
+static void get_mac_address(char* mac_addr, struct xdma_dev *xdev, int port_id) {
 	int i;
 	uint64_t hashed_num;
 	unsigned long long machine_id;
@@ -109,6 +132,12 @@ static void get_mac_address(char* mac_addr, struct xdma_dev *xdev) {
 	for (i = 0; i < ETH_ALEN; i++) {
 		mac_addr[i] = (hashed_num >> (i * 8)) & 0xFF;
 	}
+
+	if (port_id >= XDMA_NUM_PORTS && rtag_duplicate_mac) {
+		port_id = 0;
+	}
+
+	mac_addr[5] += port_id;
 
 	// Adjust U/L, I/G bits
 	mac_addr[0] &= ~0x1; // Unicast
@@ -226,6 +255,7 @@ static const struct net_device_ops xdma_netdev_ops = {
 	.ndo_start_xmit = xdma_netdev_start_xmit,
 	.ndo_setup_tc = xdma_netdev_setup_tc,
 	.ndo_eth_ioctl = xdma_netdev_ioctl,
+	.ndo_siocdevprivate = xdma_netdev_siocdevprivate,
 	.ndo_select_queue = xdma_select_queue,
 };
 
@@ -235,9 +265,10 @@ static int xdma_ethtool_get_ts_info(struct net_device * ndev, struct kernel_etht
 static int xdma_ethtool_get_ts_info(struct net_device * ndev, struct ethtool_ts_info * info) {
 #endif
 	struct xdma_private *priv = netdev_priv(ndev);
-	struct xdma_pci_dev *xpdev = dev_get_drvdata(&priv->pdev->dev);
+	struct xdma_pci_dev *xpdev = dev_get_drvdata(&priv->common->pdev->dev);
 
-	info->phc_index = ptp_clock_index(xpdev->ptp->ptp_clock);
+	/* HAT 모드: PHC 미등록(-1). RX HW TS는 코어 헤더 유래로 계속 제공 */
+	info->phc_index = xpdev->ptp ? ptp_clock_index(xpdev->ptp->ptp_clock) : -1;
 
 	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
 							SOF_TIMESTAMPING_RX_SOFTWARE |
@@ -263,9 +294,50 @@ static int xdma_ethtool_get_link_ksettings(struct net_device *netdev, struct eth
 	return 0;
 }
 
+static const char xdma_se_stat_names[][ETH_GSTRING_LEN] = {
+	"se_rx_adapter_drop",
+	"se_rx_adapter_data",
+};
+
+static int xdma_ethtool_get_sset_count(struct net_device *ndev, int stringset)
+{
+	if (stringset != ETH_SS_STATS)
+		return -EOPNOTSUPP;
+
+	return ARRAY_SIZE(xdma_se_stat_names);
+}
+
+static void xdma_ethtool_get_strings(struct net_device *ndev, u32 stringset,
+				     u8 *data)
+{
+	if (stringset == ETH_SS_STATS)
+		memcpy(data, xdma_se_stat_names, sizeof(xdma_se_stat_names));
+}
+
+static void xdma_ethtool_get_stats(struct net_device *ndev,
+				   struct ethtool_stats *stats, u64 *data)
+{
+	struct xdma_private *priv = netdev_priv(ndev);
+	struct xdma_dev *xdev = priv->common->xdev;
+
+	/* BAR0 has unrelated TSNv3 semantics outside se_mode. Return zero rather
+	 * than touching those addresses. The GPIO is read-only in the FPGA. */
+	if (!se_mode || !xdev->bar[0]) {
+		data[0] = 0;
+		data[1] = 0;
+		return;
+	}
+
+	data[0] = ioread32(xdev->bar[0] + SE_RXSTATS_DROP_OFFSET);
+	data[1] = ioread32(xdev->bar[0] + SE_RXSTATS_DATA_OFFSET);
+}
+
 static const struct ethtool_ops xdma_ethtool_ops = {
 	.get_ts_info = xdma_ethtool_get_ts_info,
 	.get_link_ksettings = xdma_ethtool_get_link_ksettings,
+	.get_sset_count = xdma_ethtool_get_sset_count,
+	.get_strings = xdma_ethtool_get_strings,
+	.get_ethtool_stats = xdma_ethtool_get_stats,
 };
 
 static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -274,9 +346,10 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct xdma_pci_dev *xpdev = NULL;
 	struct xdma_dev *xdev;
 	void *hndl;
-	struct net_device *ndev;
-	struct xdma_private *priv;
-	struct ptp_device_data *ptp_data;
+	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS] = { NULL };
+	struct xdma_private *priv[XDMA_NUM_TOTAL_PORTS] = { NULL };
+	struct xdma_private_common *common = NULL;
+	struct ptp_device_data *ptp_data = NULL;
 	unsigned char mac_addr[ETH_ALEN];
 
 	xpdev = xpdev_alloc(pdev);
@@ -352,123 +425,192 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	dev_set_drvdata(&pdev->dev, xpdev);
 
-	/* Set the TSN register to 0x1 */
-	iowrite32(TSN_ENABLE, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
+	/* Enable TSN and use Port 1.
+	 * se_mode: BAR0 = 코어 APB. 0x04 = 코어 lookup 제어(bypass 비트)라
+	 * 이 write가 스위칭 전체를 바이패스(블랙홀)시킨다 — HAT 모드에선 금지. */
+	if (!se_mode)
+		iowrite32(TSN_ENABLE | TSN_TX_PORT0 | TSN_RX_PORT0, xdev->bar[0] + REG_TSN_SYSTEM_CONTROL_LOW);
 
-	/* Allocate the network device */
-	/* TC command requires multiple TX queues */
-	ndev = alloc_etherdev_mq(sizeof(struct xdma_private), TX_QUEUE_COUNT);
-	if (!ndev) {
-		pr_err("alloc_etherdev failed\n");
-		rv = -ENOMEM;
-		goto err_out;
+	if (se_mode) {
+		/* LLEMAC promiscuous: 리셋 디폴트 OFF는 DA 불일치 유니캐스트를 전부
+		 * 드롭한다(host 종단 통신 두절). LLEMAC MACADR가 netdev MAC과 무관한
+		 * 리셋값이라 정합 필터 대신 promisc로 연다. full FPE 시 pMAC
+		 * RX/reassembly도 호스트로 받으므로 pmac_rx_enable=1일 때 같이 연다. */
+		static const u32 se_port_bases[] = { 0x20000, 0x40000 };
+		int p;
+
+		for (p = 0; p < ARRAY_SIZE(se_port_bases); p++) {
+			u32 base = se_port_bases[p];
+			u32 emac_ctrl, pmac_ctrl;
+			u32 val;
+
+			val = ioread32(xdev->bar[0] + base + SE_LLEMAC_MACADR_H_OFF);
+			iowrite32(val | SE_LLEMAC_PROMISC,
+				  xdev->bar[0] + base + SE_LLEMAC_MACADR_H_OFF);
+
+			if (pmac_rx_enable) {
+				val = ioread32(xdev->bar[0] + base + SE_LLEMAC_PMAC_OFF +
+					       SE_LLEMAC_MACADR_H_OFF);
+				iowrite32(val | SE_LLEMAC_PROMISC,
+					  xdev->bar[0] + base + SE_LLEMAC_PMAC_OFF +
+					  SE_LLEMAC_MACADR_H_OFF);
+			}
+
+			/* pMAC은 eMAC과 별개 LLEMAC이다. eMAC 모드 필드는 승계하되
+			 * fragment_tx에 필요한 TX_EN은 항상 켜고, full FPE 기본에서
+			 * RX_EN을 열어 reassembly를 유지한다. 0은 A/B 격리용이다. */
+			emac_ctrl = ioread32(xdev->bar[0] + base +
+						 SE_LLEMAC_MAC_CTRL_OFF);
+			pmac_ctrl = emac_ctrl & ~SE_LLEMAC_RX_EN;
+			pmac_ctrl |= SE_LLEMAC_TX_EN;
+			if (pmac_rx_enable)
+				pmac_ctrl |= SE_LLEMAC_RX_EN;
+			iowrite32(pmac_ctrl, xdev->bar[0] + base + SE_LLEMAC_PMAC_OFF +
+				  SE_LLEMAC_MAC_CTRL_OFF);
+		}
 	}
-	/*
-	 * Multiple RX queues drops throughput significantly.
-	 * TODO: Find out why RX queue count affects throughput
-	 * and see if it can be resolved in another way
-	 */
-	rv = netif_set_real_num_rx_queues(ndev, RX_QUEUE_COUNT);
+
+	common = kzalloc(sizeof(struct xdma_private_common), GFP_KERNEL);
+
+	common->pdev = pdev;
+	common->xdev = xpdev->xdev;
+	common->rx_engine = &xdev->engine_c2h[0];
+	common->tx_engine = &xdev->engine_h2c[0];
+
+	rv = xdma_tx_ring_alloc(common);
 	if (rv) {
-		pr_err("netif_set_real_num_rx_queues failed\n");
+		pr_err("xdma_tx_ring_alloc failed\n");
 		goto err_out;
 	}
 
-	xdev->ndev = ndev;
-	xpdev->ndev = ndev;
-
-	/* Set up the network interface */
-	ndev->netdev_ops = &xdma_netdev_ops;
-	ndev->ethtool_ops = &xdma_ethtool_ops;
-	SET_NETDEV_DEV(ndev, &pdev->dev);
-	priv = netdev_priv(ndev);
-	memset(priv, 0, sizeof(struct xdma_private));
-	priv->pdev = pdev;
-	priv->ndev = ndev;
-	priv->xdev = xpdev->xdev;
-	priv->rx_engine = &xdev->engine_c2h[0];
-	priv->tx_engine = &xdev->engine_h2c[0];
-
-	priv->tx_desc = dma_alloc_coherent(
-				&pdev->dev,
-				sizeof(struct xdma_desc),
-				&priv->tx_bus_addr,
-				GFP_KERNEL);
-	if (!priv->tx_desc) {
-		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
+	rv = xdma_rx_ring_alloc(common);
+	if (rv) {
+		pr_err("xdma_rx_ring_alloc failed\n");
 		goto err_out;
 	}
 
-	priv->rx_desc = dma_alloc_coherent(
-				&pdev->dev,
-				sizeof(struct xdma_desc),
-				&priv->rx_bus_addr,
-				GFP_KERNEL);
-	if (!priv->rx_desc) {
-		pr_err("dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
+	spin_lock_init(&common->tx_lock);
+	spin_lock_init(&common->rx_lock);
+
+	/* Tx works for each timestamp id (1..32, Track B 결함② 32-slot 확장) */
+	{
+		int tsid;
+		for (tsid = 1; tsid < TSN_TIMESTAMP_ID_MAX; tsid++)
+			INIT_WORK(&common->tx_work[tsid], xdma_tx_work_fns[tsid]);
+	}
+	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
+	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
+
+	common->tx_port = 0;
+	common->rx_port = 0;
+
+	/* HAT 모드: PHC ops가 구(TSNv3) sysclock BAR 레지스터를 읽으므로 코어 APB
+	 * BAR에서는 무효 — PHC 미등록. gPTP는 HAT 코어+펌웨어 폐루프 담당.
+	 * (호스트 PHC가 필요해지면 코어 RTC 레지스터 기반 ops로 별도 구현 — 백로그) */
+	if (se_mode) {
+		ptp_data = NULL;
+		xpdev->ptp = NULL;
+	} else {
+		ptp_data = ptp_device_init(&pdev->dev, xdev);
+		if (!ptp_data) {
+			pr_err("ptp_device_init failed\n");
+			rv = -ENOMEM;
+			goto err_out;
+		}
+
+		ptp_data->xdev = xpdev->xdev;
+		xpdev->ptp = ptp_data;
 	}
 
-	priv->res = dma_alloc_coherent(&pdev->dev, sizeof(struct xdma_result), &priv->res_dma_addr, GFP_KERNEL);
-	if (!priv->res) {
-		pr_err("res dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		/* Allocate the network device */
+		/* TC command requires multiple TX queues */
+		ndev[i] = alloc_etherdev_mq(sizeof(struct xdma_private), TX_QUEUE_COUNT);
+		if (!ndev[i]) {
+			pr_err("alloc_etherdev failed\n");
+			rv = -ENOMEM;
+			goto err_out;
+		}
+
+		/*
+		* Multiple RX queues drops throughput significantly.
+		* TODO: Find out why RX queue count affects throughput
+		* and see if it can be resolved in another way
+		*/
+		rv = netif_set_real_num_rx_queues(ndev[i], RX_QUEUE_COUNT);
+		if (rv) {
+			pr_err("netif_set_real_num_rx_queues failed\n");
+			goto err_out;
+		}
+
+		/* Set up the network interface */
+		xdev->ndev[i] = ndev[i];
+		xpdev->ndev[i] = ndev[i];
+		ndev[i]->netdev_ops = &xdma_netdev_ops;
+		ndev[i]->ethtool_ops = &xdma_ethtool_ops;
+		/* A3: 스택이 skb 할당 시 메타데이터 헤드룸/R-TAG 테일룸을 미리
+		 * 확보하게 해 start_xmit의 pskb_expand_head(재할당+복사)를 회피 */
+		ndev[i]->needed_headroom = TX_METADATA_SIZE;
+		ndev[i]->needed_tailroom = FRER_RTAG_SIZE;
+		SET_NETDEV_DEV(ndev[i], &pdev->dev);
+		ndev[i]->dev_port = i >= XDMA_NUM_PORTS ? XDMA_SPECIAL_DEV_PORT_START + (i - XDMA_NUM_PORTS) : i + 1;
+		priv[i] = netdev_priv(ndev[i]);
+		memset(priv[i], 0, sizeof(struct xdma_private));
+		priv[i]->ndev = ndev[i];
+		priv[i]->port_id = i;
+		priv[i]->physical_port_id = i >= XDMA_NUM_PORTS ? 0 : i;
+		priv[i]->common = common;
+		// priv[i]->last_rx_timestamp = 0;  // for logging
+
+		switch (i) {
+			case XDMA_FRER_PORT_ID:
+				priv[i]->port_flag |= XDMA_PORT_FLAG_FRER;
+				break;
+			default:
+				break;
+		}
+
+		/* Set the MAC address */
+		get_mac_address(mac_addr, xdev, i);
+		dev_addr_set(ndev[i], mac_addr);
 	}
 
-	spin_lock_init(&priv->tx_lock);
-	spin_lock_init(&priv->rx_lock);
-
-	/* Set the MAC address */
-	get_mac_address(mac_addr, xdev);
-	dev_addr_set(ndev, mac_addr);
-
-	priv->rx_buffer = dma_alloc_coherent(&pdev->dev, XDMA_BUFFER_SIZE, &priv->rx_dma_addr, GFP_KERNEL);
-	if (!priv->rx_buffer) {
-		pr_err("buffer dma_alloc_coherent failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		rv = register_netdev(ndev[i]);
+		if (rv < 0) {
+			pr_err("register_netdev failed\n");
+			goto err_out;
+		}
 	}
-
-	/* Tx works for each timestamp id */
-	INIT_WORK(&priv->tx_work[1], xdma_tx_work1);
-	INIT_WORK(&priv->tx_work[2], xdma_tx_work2);
-	INIT_WORK(&priv->tx_work[3], xdma_tx_work3);
-	INIT_WORK(&priv->tx_work[4], xdma_tx_work4);
-	INIT_WORK(&priv->tx_queue_work, xdma_tx_queue_work);
-
-	ptp_data = ptp_device_init(&pdev->dev, xdev);
-	if (!ptp_data) {
-		pr_err("ptp_device_init failed\n");
-		free_netdev(ndev);
-		rv = -ENOMEM;
-		goto err_out;
-	}
-
-	ptp_data->xdev = xpdev->xdev;
-	xpdev->ptp = ptp_data;
-
-	rv = register_netdev(ndev);
-	if (rv < 0) {
-		free_netdev(ndev);
-		pr_err("register_netdev failed\n");
-		goto err_out;
-	}
+	xdma_tx_napi_setup(common, ndev[0]);
+	xdma_rx_napi_setup(common, ndev[0]);
 	channel_interrupts_enable(xdev, ~0);
-	priv->is_running = true;
-	schedule_work(&priv->tx_queue_work);
+	common->is_running = true;
 	//netif_stop_queue(ndev);
 	return 0;
 
 err_out:
 	pr_err("pdev 0x%p, err %d.\n", pdev, rv);
+
+	if (common != NULL) {
+		xdma_tx_ring_free(common);
+		xdma_rx_ring_free(common);
+		cancel_delayed_work(&common->rx_poll_work);
+		kfree(common);
+	}
+
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (ndev[i] != NULL) {
+			unregister_netdev(ndev[i]);
+			free_netdev(ndev[i]);
+		}
+	}
+
+	if (ptp_data != NULL) {
+		ptp_device_destroy(ptp_data);
+	}
 	xpdev_free(xpdev);
+	dev_set_drvdata(&pdev->dev, NULL);
 	return rv;
 }
 
@@ -476,8 +618,8 @@ static void remove_one(struct pci_dev *pdev)
 {
 	struct xdma_pci_dev *xpdev;
 	struct xdma_dev *xdev;
-	struct net_device *ndev;
 	struct xdma_private *priv;
+	struct xdma_private_common *common;
 	struct ptp_device_data *ptp_data;
 
 	if (!pdev)
@@ -490,23 +632,34 @@ static void remove_one(struct pci_dev *pdev)
 	pr_info("pdev 0x%p, xdev 0x%p, 0x%p.\n",
 		pdev, xpdev, xpdev->xdev);
 
-	ndev = xpdev->ndev;
-	if (!ndev) {
-		pr_err("ndev is NULL\n");
-		return;
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (!xpdev->ndev[i]) {
+			pr_err("ndev is NULL\n");
+			return;
+		}
 	}
-	priv = netdev_priv(ndev);
+	priv = netdev_priv(xpdev->ndev[0]);
+	common = priv->common;
 	xdev = xpdev->xdev;
 	ptp_data = xpdev->ptp;
-	priv->is_running = false;
-	cancel_work_sync(&priv->tx_queue_work);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->tx_desc, priv->tx_bus_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_desc), priv->rx_desc, priv->rx_bus_addr);
-	dma_free_coherent(&pdev->dev, XDMA_BUFFER_SIZE, priv->rx_buffer, priv->rx_dma_addr);
-	dma_free_coherent(&pdev->dev, sizeof(struct xdma_result), priv->res, priv->res_dma_addr);
-	unregister_netdev(ndev);
-	ptp_device_destroy(ptp_data);
-	free_netdev(ndev);
+	common->is_running = false;
+	cancel_delayed_work(&common->rx_poll_work);
+	/* 순서 중요: 먼저 netdev를 내려 close 경로로 엔진을 정지시킨 뒤에
+	 * NAPI를 지우고 링을 해제한다. 링을 먼저 풀면 실행 중인 RX 엔진이
+	 * 해제된 코히런트 메모리에 DMA를 계속 쓴다(use-after-free). */
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		unregister_netdev(xpdev->ndev[i]);
+	}
+	xdma_tx_napi_teardown(common);
+	xdma_rx_napi_teardown(common);
+	xdma_tx_ring_free(common);
+	xdma_rx_ring_free(common);
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		free_netdev(xpdev->ndev[i]);
+	}
+	kfree(common);
+	if (ptp_data)
+		ptp_device_destroy(ptp_data);
 	xpdev_free(xpdev);
 	dev_set_drvdata(&pdev->dev, NULL);
 }

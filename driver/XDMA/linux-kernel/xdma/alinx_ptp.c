@@ -4,11 +4,24 @@
 #include "xdma_netdev.h"
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
+#include <linux/math64.h>
+
+/* base * (1 + scaled_ppm / (1e6 * 2^16)). 커널 6.2 의 adjust_by_scaled_ppm() 과 같은 계산.
+ * 더 오래된 커널(5.9 이상)에서도 빌드되도록 직접 둔다. */
+static u64 ticks_adjust_scaled_ppm(u64 base, long scaled_ppm)
+{
+        bool negative = scaled_ppm < 0;
+        u64 adj = mul_u64_u64_div_u64(base, negative ? -(u64)scaled_ppm : (u64)scaled_ppm,
+                                      1000000ULL << 16);
+
+        return negative ? base - adj : base + adj;
+}
 
 #define NS_IN_1S 1000000000
 
-static timestamp_t alinx_get_timestamp(u64 sys_count, double ticks_scale, u64 offset) {
-        timestamp_t timestamp = ticks_scale * sys_count;
+/* 정수 연산만 사용(alinx_arch.h TICKS_SCALE_FP 주석). sys_count * scale 은 128비트 곱 후 시프트. */
+static timestamp_t alinx_get_timestamp(u64 sys_count, u64 ticks_scale_fp, u64 offset) {
+        timestamp_t timestamp = mul_u64_u64_shr(sys_count, ticks_scale_fp, TICKS_SCALE_FP_SHIFT);
 
         return timestamp + offset;
 }
@@ -18,9 +31,10 @@ static void set_pulse_at(struct ptp_device_data *ptp_data, sysclock_t sys_count)
         sysclock_t next_pulse_sysclock;
         struct xdma_dev *xdev = ptp_data->xdev;
 
-        current_ns = alinx_get_timestamp(sys_count, ptp_data->ticks_scale, ptp_data->offset);
+        current_ns = alinx_get_timestamp(sys_count, ptp_data->ticks_scale_fp, ptp_data->offset);
         next_pulse_ns = current_ns - (current_ns % NS_IN_1S) + NS_IN_1S;
-        next_pulse_sysclock = ((double)(next_pulse_ns - ptp_data->offset) / ptp_data->ticks_scale);
+        next_pulse_sysclock = mul_u64_u64_div_u64(next_pulse_ns - ptp_data->offset,
+                                                  1ULL << TICKS_SCALE_FP_SHIFT, ptp_data->ticks_scale_fp);
         xdma_debug("ptp%u: %s sys_count=%llu, current_ns=%llu, next_pulse_ns=%llu, next_pulse_sysclock=%llu",
                    ptp_data->ptp_id, __func__, sys_count, current_ns, next_pulse_ns, next_pulse_sysclock);
 
@@ -32,15 +46,16 @@ static void set_cycle_1s(struct ptp_device_data *ptp_data, u32 cycle_1s) {
         alinx_set_cycle_1s_by_xdev(ptp_data->xdev, cycle_1s);
 }
 
-static void set_ticks_scale(struct ptp_device_data *ptp_data, double ticks_scale) {
-        alinx_set_ticks_scale(ptp_data->xdev->pdev, ticks_scale);
+static void set_ticks_scale(struct ptp_device_data *ptp_data, u64 ticks_scale_fp) {
+        alinx_set_ticks_scale(ptp_data->xdev->pdev, ticks_scale_fp);
 }
 
 sysclock_t alinx_timestamp_to_sysclock(struct pci_dev* pdev, timestamp_t timestamp) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
 
-        return (timestamp - ptp_data->offset) / ptp_data->ticks_scale;
+        return mul_u64_u64_div_u64(timestamp - ptp_data->offset, 1ULL << TICKS_SCALE_FP_SHIFT,
+                                   ptp_data->ticks_scale_fp);
 }
 
 timestamp_t alinx_sysclock_to_timestamp(struct pci_dev* pdev, sysclock_t sysclock) {
@@ -49,7 +64,7 @@ timestamp_t alinx_sysclock_to_timestamp(struct pci_dev* pdev, sysclock_t syscloc
 
         u64 offset = ptp_data->offset;
 
-        return alinx_get_timestamp(sysclock, ptp_data->ticks_scale, offset);
+        return alinx_get_timestamp(sysclock, ptp_data->ticks_scale_fp, offset);
 }
 
 timestamp_t alinx_get_rx_timestamp(struct pci_dev* pdev, sysclock_t sysclock) {
@@ -66,19 +81,20 @@ timestamp_t alinx_sysclock_to_txtstamp(struct pci_dev* pdev, sysclock_t sysclock
         return alinx_sysclock_to_timestamp(pdev, sysclock) + TX_ADJUST_NS;
 }
 
-double alinx_get_ticks_scale(struct pci_dev* pdev) {
+u64 alinx_get_ticks_scale(struct pci_dev* pdev) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
 
-        return ptp_data->ticks_scale;
+        return ptp_data->ticks_scale_fp;
 }
 
-void alinx_set_ticks_scale(struct pci_dev* pdev, double ticks_scale) {
+void alinx_set_ticks_scale(struct pci_dev* pdev, u64 ticks_scale_fp) {
         struct xdma_pci_dev *xpdev = dev_get_drvdata(&pdev->dev);
         struct ptp_device_data* ptp_data = xpdev->ptp;
 
-        ptp_data->ticks_scale = ticks_scale;
-        alinx_set_cycle_1s(pdev, (double)NS_IN_1S / ptp_data->ticks_scale);
+        ptp_data->ticks_scale_fp = ticks_scale_fp;
+        alinx_set_cycle_1s(pdev, (u32)mul_u64_u64_div_u64(NS_IN_1S, 1ULL << TICKS_SCALE_FP_SHIFT,
+                                                          ptp_data->ticks_scale_fp));
 }
 
 static int alinx_ptp_gettimex(struct ptp_clock_info *ptp, struct timespec64 *ts,
@@ -98,7 +114,7 @@ static int alinx_ptp_gettimex(struct ptp_clock_info *ptp, struct timespec64 *ts,
         clock = alinx_get_sys_clock_by_xdev(ptp_data->xdev);
         ptp_read_system_postts(sts);
 
-        timestamp = alinx_get_timestamp(clock, ptp_data->ticks_scale, ptp_data->offset);
+        timestamp = alinx_get_timestamp(clock, ptp_data->ticks_scale_fp, ptp_data->offset);
 
         ts->tv_sec = timestamp / NS_IN_1S;
         ts->tv_nsec = timestamp % NS_IN_1S;
@@ -127,10 +143,10 @@ static int alinx_ptp_settime(struct ptp_clock_info *ptp, const struct timespec64
 
         spin_lock_irqsave(&ptp_data->lock, flags);
 
-        ptp_data->ticks_scale = TICKS_SCALE;
+        ptp_data->ticks_scale_fp = TICKS_SCALE_FP;
 
         sys_clock = alinx_get_sys_clock_by_xdev(xdev);
-        hw_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale, ptp_data->offset);
+        hw_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale_fp, ptp_data->offset);
 
         ptp_data->offset = host_timestamp - hw_timestamp;
 
@@ -175,9 +191,7 @@ static int alinx_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
         u64 cur_timestamp, new_timestamp;
         u64 sys_clock;
-        double diff;
         unsigned long flags;
-        int is_negative = 0;
 
         struct ptp_device_data *ptp_data = container_of(
                                 ptp,
@@ -193,30 +207,24 @@ static int alinx_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
                 goto exit;
         }
 
-        cur_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale, ptp_data->offset);
+        cur_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale_fp, ptp_data->offset);
 
-        if (scaled_ppm < 0) {
-                is_negative = 1;
-                scaled_ppm = -scaled_ppm;
-        }
-
-        /* Adjust ticks_scale */
-        diff = TICKS_SCALE * (double)scaled_ppm / (double)(1000000ULL << 16);
-        ptp_data->ticks_scale = TICKS_SCALE + (is_negative ? - diff : diff);
+        /* Adjust ticks_scale: base * (1 + scaled_ppm / (1e6 * 2^16)) */
+        ptp_data->ticks_scale_fp = ticks_adjust_scaled_ppm(TICKS_SCALE_FP, scaled_ppm);
 
         /* Adjust offset */
-        new_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale, ptp_data->offset);
+        new_timestamp = alinx_get_timestamp(sys_clock, ptp_data->ticks_scale_fp, ptp_data->offset);
         ptp_data->offset += (cur_timestamp - new_timestamp);
 
         /* Adjust cycle_1s */
-        set_ticks_scale(ptp_data, ptp_data->ticks_scale);
+        set_ticks_scale(ptp_data, ptp_data->ticks_scale_fp);
 
         /* Set pulse_at */
         sys_clock = alinx_get_sys_clock_by_xdev(xdev);
         set_pulse_at(ptp_data, sys_clock);
 
-        xdma_debug("ptp%u: %s scaled_ppm=%ld, offset=%llu, ticks_scale:%lf",
-                   ptp_data->ptp_id, __func__, scaled_ppm, ptp_data->offset, ptp_data->ticks_scale);
+        xdma_debug("ptp%u: %s scaled_ppm=%ld, offset=%llu, ticks_scale_fp:%llu",
+                   ptp_data->ptp_id, __func__, scaled_ppm, ptp_data->offset, ptp_data->ticks_scale_fp);
 
 exit:
         spin_unlock_irqrestore(&ptp_data->lock, flags);
@@ -256,7 +264,7 @@ struct ptp_device_data *ptp_device_init(struct device *dev, struct xdma_dev *xde
         memset(ptp, 0, sizeof(struct ptp_device_data));
 
         ptp->ptp_info = ptp_clock_info_init();
-        ptp->ticks_scale = TICKS_SCALE;
+        ptp->ticks_scale_fp = TICKS_SCALE_FP;
 
         spin_lock_init(&ptp->lock);
 

@@ -314,7 +314,7 @@ static uint64_t bytes_to_ns(uint64_t bytes) {
 
 static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint8_t tc_id, uint64_t bytes) {
 	uint64_t elapsed_from_last_update, sending_duration;
-	double earned_credit, spending_credit;
+	s64 credit;
 	timestamp_t send_end;
 	struct qav_state* qav = &tsn_config->qav[tc_id];
 
@@ -328,19 +328,30 @@ static void spend_qav_credit(struct tsn_config* tsn_config, timestamp_t at, uint
 		return;
 	}
 
+	/* 2026-10-07: double -> 정수(s64 포화). 커널 코드는 FPU/SIMD 를 쓰지 않는다(alinx_arch.h
+	 * TICKS_SCALE_FP 주석). 경과시간이 길면 곱이 넘치므로 한계까지 남은 폭을 먼저 확인한다.
+	 * 종전 double 은 int32 범위를 넘는 값을 정수로 바꿀 때 정의되지 않은 동작이었다. */
 	elapsed_from_last_update = at - qav->last_update;
-	earned_credit = (double)elapsed_from_last_update * qav->idle_slope;
-	qav->credit += earned_credit;
-	if (qav->credit > qav->hi_credit) {
-		qav->credit = qav->hi_credit;
+	credit = qav->credit;
+	if (qav->idle_slope > 0 && (credit >= qav->hi_credit ||
+	    elapsed_from_last_update > (u64)((s64)qav->hi_credit - credit) / (u64)qav->idle_slope))
+		credit = qav->hi_credit;
+	else
+		credit += (s64)elapsed_from_last_update * qav->idle_slope;
+	if (credit > qav->hi_credit) {
+		credit = qav->hi_credit;
 	}
 
 	sending_duration = bytes_to_ns(bytes);
-	spending_credit = (double)sending_duration * qav->send_slope;
-	qav->credit += spending_credit;
-	if (qav->credit < qav->lo_credit) {
-		qav->credit = qav->lo_credit;
+	if (qav->send_slope < 0 && (credit <= qav->lo_credit ||
+	    sending_duration > (u64)(credit - (s64)qav->lo_credit) / (u64)(-(s64)qav->send_slope)))
+		credit = qav->lo_credit;
+	else
+		credit += (s64)sending_duration * qav->send_slope;
+	if (credit < qav->lo_credit) {
+		credit = qav->lo_credit;
 	}
+	qav->credit = (int32_t)credit;
 
 	// Calulate next available time
 	send_end = at + sending_duration;

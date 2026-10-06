@@ -28,12 +28,12 @@ uname_m := $(shell uname -m)
 # A3: EXTRA_CFLAGS는 신형 kbuild(6.12)에서 더 이상 반영되지 않는다(실측:
 # topdir가 옳게 풀려도 -I가 컴파일에 안 붙음) -> ccflags-y로 전환.
 ccflags-y += -I$(topdir)/include $(XVC_FLAGS)
-ifeq ($(uname_m),x86_64)
-	ccflags-y += -msse2
-else
-	ccflags-y += -march=armv8-a+simd -D__LIBXDMA_RPI__
-	KBUILD_CFLAGS := $(filter-out -mgeneral-regs-only, $(KBUILD_CFLAGS))
-	KBUILD_CFLAGS += -ffreestanding -isystem $(shell $(CC) -print-file-name=include)
+# FPU/SIMD 컴파일 플래그를 쓰지 않는다(2026-10-07). 종전 x86 의 -msse2 와 arm64 의 +simd 는
+# 컴파일러가 IRQ·softirq·start_xmit 코드에서도 SSE/NEON 레지스터를 쓰게 했다. 커널은 이 문맥에서
+# 사용자 FPU 상태를 저장하지 않으므로 같은 CPU 의 사용자 프로세스가 손상됐다. double 연산은
+# 정수로 바꿨다(alinx_ptp.c, tsn.c). 커널 기본 플래그(-mno-sse 등 / -mgeneral-regs-only)를 쓴다.
+ifneq ($(uname_m),x86_64)
+	ccflags-y += -D__LIBXDMA_RPI__
 endif
 
 ifeq ($(DEBUG),1)

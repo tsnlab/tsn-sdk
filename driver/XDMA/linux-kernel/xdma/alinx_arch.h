@@ -78,8 +78,12 @@ typedef uint32_t u32
 #define TX_QUEUE_COUNT 8
 #define RX_QUEUE_COUNT 8
 
-/* 125 MHz */
-#define TICKS_SCALE 8.0
+/* 125 MHz.
+ * 2026-10-07: ns/tick 비율을 double 대신 고정소수점(Q8.56, 단위 2^-56 ns)으로 둔다.
+ * 커널 코드에서 FPU/SIMD 를 쓰면 IRQ·softirq 문맥에서 사용자 FPU 상태가 덮어써진다.
+ * 커널 코드는 정수 연산만 쓴다. */
+#define TICKS_SCALE_FP_SHIFT 56
+#define TICKS_SCALE_FP (8ULL << TICKS_SCALE_FP_SHIFT)
 #define RESERVED_CYCLE 125000000
 
 #define HW_QUEUE_SIZE_PAD 20
@@ -131,7 +135,7 @@ struct ptp_device_data {
         struct ptp_clock *ptp_clock;
         struct ptp_clock_info ptp_info;
         struct xdma_dev *xdev;
-        double ticks_scale;
+        u64 ticks_scale_fp;     /* ns/tick, Q8.56 (TICKS_SCALE_FP_SHIFT), 256 ns/tick 미만 */
         u64 offset;
         spinlock_t lock;
 #ifdef __LIBXDMA_DEBUG__

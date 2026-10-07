@@ -19,7 +19,7 @@ timestamp_t alinx_get_rx_timestamp(struct pci_dev* pdev, sysclock_t sysclock);
 timestamp_t alinx_get_tx_timestamp(struct pci_dev* pdev, int tx_id);
 timestamp_t alinx_sysclock_to_txtstamp(struct pci_dev* pdev, sysclock_t sysclock);
 
-double alinx_get_ticks_scale(struct pci_dev* pdev);
-void alinx_set_ticks_scale(struct pci_dev* pdev, double ticks_scale);
+u64 alinx_get_ticks_scale(struct pci_dev* pdev);
+void alinx_set_ticks_scale(struct pci_dev* pdev, u64 ticks_scale_fp);
 
 #endif /* ALINX_PTP_H */

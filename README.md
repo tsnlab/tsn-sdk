@@ -4,6 +4,8 @@
 
 TSN SDK is a full suite for making <abbr title="Time Sensitive Networking">TSN</abbr> application.
 
+For the GStreamer, sensor, and TAS/CBS examples, start with [TSN application examples](examples/README.md).
+
 
 ## Build
 

@@ -37,7 +37,7 @@ MODULE_PARM_DESC(tx_prefetch,
  * unmap 창(재활용 유저페이지 손상 벡터)이 원천 소멸한다. 프레임당 memcpy = CPU 비용.
  * 0=production streaming(기본). 이 param으로 손상 벡터가 우리 TX 매핑인지 A/B 판정. */
 unsigned int tx_bounce;
-module_param(tx_bounce, uint, 0644);
+module_param(tx_bounce, uint, 0444);
 MODULE_PARM_DESC(tx_bounce,
 	"1=coherent bounce buffer TX (no streaming map), 0=streaming (default)");
 
@@ -135,6 +135,17 @@ static inline void xdma_engine_stop_sync(struct xdma_engine *engine)
 		udelay(1);
 	}
 	pr_warn_ratelimited("xdma: engine busy after stop (200us)\n");
+}
+
+/* Only enable this for SE images that require 8-byte DMA alignment/padding. */
+static bool tx_h2c_align;
+module_param(tx_h2c_align, bool, 0444);
+MODULE_PARM_DESC(tx_h2c_align,
+                 "SE x1: align H2C descriptors and trim C2H DMA padding");
+
+static bool xdma_se_dma_padding(void)
+{
+        return se_mode && tx_h2c_align;
 }
 
 #define LOWER_29_BITS ((1ULL << 29) - 1)
@@ -270,19 +281,24 @@ static bool xdma_tx_ring_enqueue(struct xdma_private_common *common,
         struct tx_ring_slot *slot;
         struct xdma_desc *desc;
         u32 idx;
+        u32 bytes = skb->len;
 
         if (tx_ring_free(common) == 0)
                 return false;
 
         idx = common->tx_head & TX_RING_MASK;
         slot = &common->tx_slots[idx];
-        if (tx_bounce) {
-                /* skb->data를 슬롯별 고정 coherent 버퍼에 복사하고 그 주소를 desc로.
-                 * streaming map/unmap 없음 → lazy-unmap 창 노출 소멸. (len<=BUF는
-                 * start_xmit에서 보장) */
-                memcpy(common->tx_bufs + (size_t)idx * TX_BOUNCE_BUF_SIZE,
-                       skb->data, skb->len);
-                dma = common->tx_bufs_bus + (dma_addr_t)idx * TX_BOUNCE_BUF_SIZE;
+        if (common->tx_bufs) {
+                size_t offset = (size_t)idx * TX_BOUNCE_BUF_SIZE;
+                u8 *buffer = common->tx_bufs + offset;
+
+                memcpy(buffer, skb->data, skb->len);
+                if (xdma_se_dma_padding()) {
+                        /* Keep the original Ethernet length in the metadata. */
+                        bytes = ALIGN(skb->len, 8);
+                        memset(buffer + skb->len, 0, bytes - skb->len);
+                }
+                dma = common->tx_bufs_bus + offset;
         }
         slot->skb = skb;
         slot->dma = dma;
@@ -294,7 +310,7 @@ static bool xdma_tx_ring_enqueue(struct xdma_private_common *common,
         desc->control = cpu_to_le32(DESC_MAGIC | XDMA_DESC_EOP);
         desc->src_addr_lo = cpu_to_le32(PCI_DMA_L(dma));
         desc->src_addr_hi = cpu_to_le32(PCI_DMA_H(dma));
-        desc->bytes = cpu_to_le32(skb->len);
+        desc->bytes = cpu_to_le32(bytes);
         /* next 포인터는 링 생성 시 원형으로 프리링크됨 */
 
         common->tx_head++;
@@ -357,7 +373,7 @@ static int xdma_tx_napi_poll(struct napi_struct *napi, int budget)
                 dma_addr_t dma = *(dma_addr_t *)skb->cb;
                 u32 len = *(u32 *)(skb->cb + sizeof(dma_addr_t));
 
-                if (!tx_bounce)
+                if (!common->tx_bufs)
                         dma_unmap_single(&xdev->pdev->dev, dma, len, DMA_TO_DEVICE);
                 if (xdev->ndev[0]) {
                         xdev->ndev[0]->stats.tx_packets++;
@@ -400,7 +416,7 @@ int xdma_tx_ring_alloc(struct xdma_private_common *common)
                 common->tx_ring[i].next_lo = cpu_to_le32(PCI_DMA_L(next));
                 common->tx_ring[i].next_hi = cpu_to_le32(PCI_DMA_H(next));
         }
-        if (tx_bounce) {
+        if (tx_bounce || xdma_se_dma_padding()) {
                 common->tx_bufs = dma_alloc_coherent(&pdev->dev,
                                 TX_RING_SIZE * (size_t)TX_BOUNCE_BUF_SIZE,
                                 &common->tx_bufs_bus, GFP_KERNEL);
@@ -430,7 +446,7 @@ void xdma_tx_ring_free(struct xdma_private_common *common)
                 struct tx_ring_slot *slot = &common->tx_slots[i & TX_RING_MASK];
 
                 if (slot->skb) {
-                        if (!tx_bounce)
+                        if (!common->tx_bufs)
                                 dma_unmap_single(&pdev->dev, slot->dma, slot->len,
                                                  DMA_TO_DEVICE);
                         dev_kfree_skb_any(slot->skb);
@@ -583,6 +599,14 @@ static void xdma_rx_process_slot(struct xdma_private_common *common, u32 idx, u3
                 pr_warn_ratelimited("rx: invalid writeback length %u\n", length);
                 ndev->stats.rx_errors++;
                 return;
+        }
+
+        if (xdma_se_dma_padding()) {
+                unsigned int frame_len = rx_buf->metadata.frame_length;
+
+                if (frame_len >= ETH_HLEN && frame_len < skb_len &&
+                    ALIGN(frame_len + RX_METADATA_SIZE, 8) == length)
+                        skb_len = frame_len;
         }
 
         skb = napi_alloc_skb(&common->rx_napi, skb_len);
@@ -1107,7 +1131,7 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
 
 se_enqueue:
 
-        if (tx_bounce) {
+        if (common->tx_bufs) {
                 /* streaming map 없음 — 실제 복사·주소는 enqueue에서(슬롯 idx 확정 후).
                  * 여기선 프레임이 슬롯 버퍼에 들어가는지만 보장한다. */
                 if (unlikely(skb->len > TX_BOUNCE_BUF_SIZE)) {
@@ -1156,7 +1180,7 @@ se_enqueue:
         if (unlikely(!xdma_tx_ring_enqueue(common, skb, dma_addr,
                         priv->port_id == XDMA_FRER_PORT_ID ? -1 : (s8)priv->port_id))) {
                 spin_unlock_irqrestore(&common->tx_lock, flags);
-                if (!tx_bounce)
+                if (!common->tx_bufs)
                         dma_unmap_single(&xdev->pdev->dev, dma_addr, skb->len,
                                          DMA_TO_DEVICE);
                 if (tstamp_acquired) {

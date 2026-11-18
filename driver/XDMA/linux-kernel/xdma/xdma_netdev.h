@@ -83,7 +83,7 @@ struct xdma_private_common {
         /* A1 TX 디스크립터 링 (tx_lock 보호) */
         struct xdma_desc *tx_ring;              /* TX_RING_SIZE 연속 desc */
         dma_addr_t tx_ring_bus;
-        u8 *tx_bufs;                            /* tx_bounce: TX_RING_SIZE * TX_BOUNCE_BUF_SIZE coherent */
+        u8 *tx_bufs;                            /* Coherent TX slots, if selected at probe. */
         dma_addr_t tx_bufs_bus;
         struct tx_ring_slot tx_slots[TX_RING_SIZE];
         u32 tx_head;                            /* 다음 채울 슬롯 (producer) */

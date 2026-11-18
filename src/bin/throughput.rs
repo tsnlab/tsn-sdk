@@ -107,10 +107,7 @@ fn main() {
         .about("Server mode")
         .short_flag('s')
         .arg(arg!(interface: -i --interface <interface> "interface to use").required(true))
-        .arg(
-            arg!(--vlanid <id> "VLAN ID (1-4094)")
-                .required(true),
-        )
+        .arg(arg!(--vlanid <id> "VLAN ID (1-4094)").required(true))
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)
@@ -142,10 +139,7 @@ fn main() {
                 .required(false)
                 .default_value("1000000000"), // 1 Gbps
         )
-        .arg(
-            arg!(--vlanid <id> "VLAN ID (1-4094)")
-                .required(true),
-        )
+        .arg(arg!(--vlanid <id> "VLAN ID (1-4094)").required(true))
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)
@@ -182,7 +176,9 @@ fn main() {
             let vlan_id: u16 = client_matches.value_of("vlanid").unwrap().parse().unwrap();
             let vlan_pri: u32 = client_matches.value_of("pcp").unwrap().parse().unwrap();
 
-            do_client(iface, target, size, duration, warmup, bitrate, vlan_id, vlan_pri)
+            do_client(
+                iface, target, size, duration, warmup, bitrate, vlan_id, vlan_pri,
+            )
         }
         _ => panic!("Invalid command"),
     }

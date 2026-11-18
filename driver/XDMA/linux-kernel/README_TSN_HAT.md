@@ -61,7 +61,7 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 
    ```
    sudo apt update
-   sudo apt install -y git pciutils iproute2 kmod build-essential "linux-headers-$(uname -r)"
+   sudo apt install -y --no-upgrade git pciutils iproute2 kmod build-essential "linux-headers-$(uname -r)"
    test -f "/lib/modules/$(uname -r)/build/Makefile"
    ```
 

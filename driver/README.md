@@ -6,6 +6,22 @@ For Xilinx DMA IP Reference drivers, see Xilinx DMA IP Reference drivers below.
 TSNLAB XDMA is in subdirectory XDMA/linux-kernel.
 Go to the XDMA/linux-kernel directory and see the readme.txt file.
 
+## SE images with 8-byte DMA padding
+
+Use the DMA mode specified for your FPGA image. A PCI ID such as `10ee:7021`
+or `10ee:7024` identifies a supported device but does not select its DMA mode.
+For an SE Gen2 x1 image that requires 8-byte DMA transfers, load the driver
+with the alignment option:
+
+```sh
+sudo insmod xdma.ko se_mode=1 tx_h2c_align=1
+```
+
+For other images, omit `tx_h2c_align` (the default is off). The driver aligns
+the DMA source address and transfer length while keeping the original Ethernet
+frame length. It removes the matching receive-side padding before passing the
+frame to Linux. Set `tx_h2c_align` and `tx_bounce` when loading the module.
+
 #
 
 # Xilinx DMA IP Reference drivers

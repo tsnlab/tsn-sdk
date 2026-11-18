@@ -13,6 +13,7 @@
 #include "alinx_arch.h"
 #include "frer.h"
 #include "se_rtc.h"
+#include "se_phy.h"
 
 /* rx_ts_gptp: se_mode 수신 하드웨어 시각을 gPTP 시각(curtime + RTC offset)으로 준다.
  * 0 이면 예전처럼 curtime 그대로 준다(A/B 용). */
@@ -874,19 +875,16 @@ int xdma_netdev_open(struct net_device *ndev)
         struct xdma_private_common *common = priv->common;
         int i;
 
-        netif_carrier_on(ndev);
         netif_start_queue(ndev);
         for (i = 0; i < TX_QUEUE_COUNT; i++) {
                 netif_start_subqueue(ndev, i);
         }
 
-        if (common->open_cnt++ > 0) {
-                return 0;
+        if (common->open_cnt++ == 0) {
+                xdma_rx_ring_start(common);
+                xdma_rx_lat_qos_start(common);
         }
-
-        /* A2: RX 링 체인 제출로 시동 */
-        xdma_rx_ring_start(common);
-        xdma_rx_lat_qos_start(common);
+        xdma_se_phy_open(ndev);
 
         return 0;
 }
@@ -897,6 +895,7 @@ int xdma_netdev_close(struct net_device *ndev)
         struct xdma_private *priv = netdev_priv(ndev);
         struct xdma_private_common *common = priv->common;
 
+        xdma_se_phy_close(ndev);
         netif_stop_queue(ndev);
         for (i = 0; i < TX_QUEUE_COUNT; i++) {
                 netif_stop_subqueue(ndev, i);
@@ -908,7 +907,6 @@ int xdma_netdev_close(struct net_device *ndev)
                 xdma_rx_lat_qos_stop(common);
         }
         pr_info("xdma_netdev_close\n");
-        netif_carrier_off(ndev);
         return 0;
 }
 
@@ -1362,6 +1360,9 @@ static int frer_ioctl_enable(struct net_device *ndev, struct ifreq *ifr, void *d
 
 int xdma_netdev_ioctl(struct net_device *ndev, struct ifreq *ifr, int cmd) {
 	switch (cmd) {
+	case SIOCGMIIPHY:
+	case SIOCGMIIREG:
+		return xdma_se_mii_ioctl(ndev, ifr, cmd);
 	case SIOCGHWTSTAMP:
 		return xdma_get_ts_config(ndev, ifr);
 	case SIOCSHWTSTAMP:

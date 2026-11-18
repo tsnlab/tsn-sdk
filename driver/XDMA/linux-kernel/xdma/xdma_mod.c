@@ -31,6 +31,7 @@
 #include "xdma_cdev.h"
 #include "version.h"
 #include "xdma_netdev.h"
+#include "se_phy.h"
 #include "alinx_ptp.h"
 #include "alinx_arch.h"
 #include "frer.h"
@@ -550,11 +551,17 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	common = kzalloc(sizeof(struct xdma_private_common), GFP_KERNEL);
+	if (!common) {
+		rv = -ENOMEM;
+		goto err_out;
+	}
 
 	common->pdev = pdev;
 	common->xdev = xpdev->xdev;
 	common->rx_engine = &xdev->engine_c2h[0];
 	common->tx_engine = &xdev->engine_h2c[0];
+	xdma_se_phy_init(common);
+	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
 
 	rv = xdma_tx_ring_alloc(common);
 	if (rv) {
@@ -577,7 +584,6 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		for (tsid = 1; tsid < TSN_TIMESTAMP_ID_MAX; tsid++)
 			INIT_WORK(&common->tx_work[tsid], xdma_tx_work_fns[tsid]);
 	}
-	INIT_DELAYED_WORK(&common->rx_poll_work, xdma_rx_poll_work);
 	schedule_delayed_work(&common->rx_poll_work, usecs_to_jiffies(RX_POLL_WORK_INTERVAL_US));
 
 	common->tx_port = 0;
@@ -659,6 +665,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		/* Set the MAC address */
 		get_mac_address(mac_addr, xdev, i, have_dna, board_dna);
 		dev_addr_set(ndev[i], mac_addr);
+		netif_carrier_off(ndev[i]);
 	}
 
 	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
@@ -678,16 +685,20 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 err_out:
 	pr_err("pdev 0x%p, err %d.\n", pdev, rv);
 
+	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
+		if (ndev[i] && ndev[i]->reg_state == NETREG_REGISTERED)
+			unregister_netdev(ndev[i]);
+	}
 	if (common != NULL) {
+		cancel_delayed_work_sync(&common->phy_poll);
+		cancel_delayed_work_sync(&common->rx_poll_work);
 		xdma_tx_ring_free(common);
 		xdma_rx_ring_free(common);
-		cancel_delayed_work(&common->rx_poll_work);
 		kfree(common);
 	}
 
 	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
 		if (ndev[i] != NULL) {
-			unregister_netdev(ndev[i]);
 			free_netdev(ndev[i]);
 		}
 	}
@@ -736,6 +747,7 @@ static void remove_one(struct pci_dev *pdev)
 	for (int i = 0; i < XDMA_NUM_TOTAL_PORTS; i++) {
 		unregister_netdev(xpdev->ndev[i]);
 	}
+	cancel_delayed_work_sync(&common->phy_poll);
 	xdma_tx_napi_teardown(common);
 	xdma_rx_napi_teardown(common);
 	xdma_tx_ring_free(common);

@@ -22,8 +22,11 @@
 --dry-run: 보드에 쓰지 않고 쓰기 순서만 출력한다(빈 레지스터 모형).
 """
 import argparse
+import errno
+import fcntl
 import json
 import os
+import socket
 import struct
 import sys
 import time
@@ -373,11 +376,61 @@ def mdio_read(b, base, pa, reg, tries=20000):
     raise SystemExit(f"MDIO 응답 없음(0x{base:05X})")
 
 
+def link_via_driver(b, port):
+    """Serialize PHY reads with the driver's carrier polling."""
+    dev_port = "1" if port == "eth1" else "2"
+    if not b.bdf:
+        return None
+    root = os.path.join("/sys/bus/pci/devices", b.bdf, "net")
+    if not os.path.isdir(root):
+        return None
+    iface = None
+    for name in os.listdir(root):
+        try:
+            with open(os.path.join(root, name, "dev_port"), encoding="ascii") as f:
+                if f.read().strip() == dev_port:
+                    iface = name
+                    break
+        except FileNotFoundError:
+            continue
+    if iface is None:
+        return None
+    get_phy, get_reg = 0x8947, 0x8948   # SIOCGMIIPHY, SIOCGMIIREG
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        def read(command, addr, reg):
+            request = bytearray(struct.pack("=16s4H", iface.encode(), addr, reg, 0, 0).ljust(40, b"\0"))
+            fcntl.ioctl(s.fileno(), command, request, True)
+            phy_addr, _, _, value = struct.unpack_from("=4H", request, 16)
+            return phy_addr, value
+        try:
+            addr, bmsr = read(get_phy, 0, 1)
+        except OSError as exc:
+            if exc.errno in (errno.EOPNOTSUPP, errno.ENOTTY):
+                return None
+            return {"port": port, "link": "unknown", "error": str(exc)}
+        try:
+            _, ctl = read(get_reg, addr, 0x1F)
+        except OSError as exc:
+            return {"port": port, "link": "unknown", "error": str(exc)}
+    return describe_phy(port, addr, bmsr, ctl)
+
+
+def describe_phy(port, pa, bmsr, ctl):
+    speed = 1000 if ctl & 0x40 else 100 if ctl & 0x20 else 10 if ctl & 0x10 else None
+    up = bool(bmsr & 0x4)
+    return {"port": port, "link": "up" if up else "down", "speed_mbps": speed if up else None,
+            "duplex": ("full" if ctl & 0x8 else "half") if up else None, "autoneg_done": bool(bmsr & 0x20),
+            "phy_addr": pa, "bmsr": f"0x{bmsr:04X}", "phyctl": f"0x{ctl:04X}"}
+
+
 def link(b, port):
-    """PHY 링크 상태를 MDIO 로 읽는다(읽기만, 보드 펌웨어·드라이버는 MDIO 를 쓰지 않음)."""
+    """Read PHY link data through XDMA, with a fallback for older drivers."""
     base = MDIO_BASE[port]
     if b.dry:
         return {"port": port, "dry_run": True}
+    link_data = link_via_driver(b, port)
+    if link_data is not None:
+        return link_data
     if not (b.rd(base + 0x20) & (1 << 8)):
         b.wr(base + 0x20, (1 << 8) | 0x18)             # MDIO 켜기, MDC 분주
         time.sleep(0.01)
@@ -387,11 +440,7 @@ def link(b, port):
     mdio_read(b, base, pa, 1)                          # BMSR 링크 비트는 끊김을 한 번 붙잡아 두므로 두 번 읽는다
     bmsr = mdio_read(b, base, pa, 1)
     ctl = mdio_read(b, base, pa, 0x1F)                 # KSZ9031 PHY Control: [6]1000 [5]100 [4]10 [3]전이중
-    speed = 1000 if ctl & 0x40 else 100 if ctl & 0x20 else 10 if ctl & 0x10 else None
-    up = bool(bmsr & 0x4)
-    return {"port": port, "link": "up" if up else "down", "speed_mbps": speed if up else None,
-            "duplex": ("full" if ctl & 0x8 else "half") if up else None, "autoneg_done": bool(bmsr & 0x20),
-            "phy_addr": pa, "bmsr": f"0x{bmsr:04X}", "phyctl": f"0x{ctl:04X}"}
+    return describe_phy(port, pa, bmsr, ctl)
 
 
 # ---- 메일박스·상태 블록(메일박스가 있는 FPGA 이미지) -------------------------------------------------------------

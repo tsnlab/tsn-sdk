@@ -29,21 +29,24 @@ TSN 기능은 TSN HAT의 USB-C UART로 설정한다. 4절을 참조하십시오.
 
 ## 2. Raspberry Pi 설정
 
-1. `/boot/firmware/config.txt`를 여십시오.
-2. PCIe를 아직 활성화하지 않았다면 다음 줄을 추가하십시오.
+1. Raspberry Pi가 TSN HAT을 인식하는지 먼저 확인하십시오.
+   `lspci`가 없으면 `sudo apt update`와 `sudo apt install -y pciutils`를 실행하십시오.
 
-   ```
-   dtparam=pciex1
-   ```
-
-3. 설정을 변경했다면 Raspberry Pi를 재부팅하십시오.
-4. Raspberry Pi가 TSN HAT을 인식하는지 확인하십시오.
-
-   ```
+   ```sh
    lspci -nn -d 10ee:
    ```
 
-   TSN HAT의 지원 PCI ID는 `10ee:7021` 또는 `10ee:7024`이다.
+   `10ee:7021` 또는 `10ee:7024`가 보이면 3절로 진행하십시오. Ubuntu 24.04에서는 `dtparam=pciex1` 없이도 장치가 보일 수 있다.
+
+2. 두 PCI ID가 모두 보이지 않으면 `/boot/firmware/config.txt`의 마지막 `[all]` 구간에 `dtparam=pciex1`을 추가하십시오.
+   파일이 다른 구간으로 끝나면 맨 끝에 `[all]`을 추가하십시오.
+
+   ```ini
+   [all]
+   dtparam=pciex1
+   ```
+
+3. 파일을 저장하고 Raspberry Pi를 재부팅하십시오. `lspci -nn -d 10ee:`를 다시 실행하여 두 PCI ID 중 하나가 보이는지 확인하십시오.
    출력 첫 열의 PCI 주소로 해당 보드의 네트워크 인터페이스를 찾을 수 있다.
 
 장치가 보이지 않으면 다음 절차를 수행하십시오.
@@ -91,6 +94,9 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 
    SE 모드에서 8바이트 DMA 정렬이 자동으로 적용된다. SE-HP HAT C1(Gen2 x1)은
    이 정렬을 필요로 한다. HAT에 제공된 릴리스 정보로 C1 여부를 확인할 수 있다.
+
+   수동 적재는 재부팅하면 해제된다. 재부팅 뒤 `xdma` 빌드 디렉터리에서 같은 `sudo insmod xdma.ko se_mode=1` 명령을 실행하십시오.
+   아래 DKMS 절차로 설치한 드라이버는 부팅할 때 자동으로 적재된다.
 
 5. `udevadm settle`이 끝나면 PCI 주소 아래에서 Linux 인터페이스 이름을 확인하십시오. 예시의 `0000:01:00.0`을
    `lspci`에 표시된 주소로 바꾸십시오. `dev_port`가 1인 인터페이스가 HAT 포트 1이다.

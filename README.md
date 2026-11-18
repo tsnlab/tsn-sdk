@@ -18,32 +18,34 @@ cargo build  # Debug build
 
 ## Running examples
 
+Replace the placeholders below and use the same VLAN ID (1–4094) on both hosts.
+
 ```sh
 #Run latency
 
 #Server
-sudo ./target/release/latency -s -i <interface>
+sudo ./target/release/latency -s -i <interface> --vlanid <VLAN ID>
 #Client
-sudo ./target/release/latency -c -i <interface> -t <target MAC address>
+sudo ./target/release/latency -c -i <interface> -t <target MAC address> --vlanid <VLAN ID>
 
 #To see more options
 sudo ./target/release/latency --help
-sudo ./target/release/latency server help
-sudo ./target/release/latency client help
+sudo ./target/release/latency server --help
+sudo ./target/release/latency client --help
 ```
 
 ```sh
 #Run throughput
 
 #Server
-sudo ./target/release/throughput -s -i <interface>
+sudo ./target/release/throughput -s -i <interface> --vlanid <VLAN ID>
 #Client
-sudo ./target/release/latency -c -i <interface> -t <target MAC address>
+sudo ./target/release/throughput -c -i <interface> -t <target MAC address> --vlanid <VLAN ID>
 
 #To see more options
 sudo ./target/release/throughput --help
-sudo ./target/release/throughput server help
-sudo ./target/release/throughput client help
+sudo ./target/release/throughput server --help
+sudo ./target/release/throughput client --help
 ```
 
 ## License

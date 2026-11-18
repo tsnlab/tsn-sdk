@@ -60,12 +60,23 @@ Run the following on both hosts. All commands assume the repository is cloned in
    If the running kernel's header package is missing, follow the
    [kernel header guidance](../driver/XDMA/linux-kernel/README_TSN_HAT.md#3-드라이버-빌드와-적재).
 
-2. Raspberry Pi 5 only: enable external PCIe with `dtparam=pciex1` in `/boot/firmware/config.txt`.
-   Reboot after changing that file, then check for PCI ID `10ee:7021` or `10ee:7024`.
+2. On Raspberry Pi 5, check for the board before editing the boot configuration.
 
    ```sh
    lspci -nn -d 10ee:
    ```
+
+   If the output includes `10ee:7021` or `10ee:7024`, continue to step 3. Ubuntu 24.04 can already detect the board without `dtparam=pciex1`.
+
+   If neither ID appears, add `dtparam=pciex1` under the final `[all]` section of `/boot/firmware/config.txt`.
+   Add the `[all]` header at the end if the file ends in another section.
+
+   ```ini
+   [all]
+   dtparam=pciex1
+   ```
+
+   Save the file and reboot. Run `lspci -nn -d 10ee:` again and confirm one of the two IDs before building the driver.
 
 3. Clone the repository, build the driver and load it.
 
@@ -77,7 +88,8 @@ Run the following on both hosts. All commands assume the repository is cloned in
    sudo insmod xdma.ko se_mode=1
    ```
 
-   The default module parameters are the recommended values (see the parameter table in the driver README). To load the driver at every boot, use the DKMS installation described in the driver README.
+   A manual `insmod` load lasts until reboot. After each reboot, rerun `sudo insmod xdma.ko se_mode=1` from `~/tsn-sdk/driver/XDMA/linux-kernel/xdma` before doing step 4.
+   If you installed the driver with the SDK's [DKMS procedure](../driver/XDMA/linux-kernel/README_TSN_HAT.md#3-드라이버-빌드와-적재), it loads automatically at boot. Proceed to step 4 to verify it.
 
 4. Check the driver. `se_mode` must be `1`, and the `dmesg` command must print a line.
 

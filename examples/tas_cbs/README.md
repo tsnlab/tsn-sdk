@@ -27,13 +27,15 @@ Notes:
 
 ## 2. Installation
 
-On both hosts:
+On both hosts, use noninteractive installation. On Ubuntu 24.04, the iperf3 package can wait for a debconf answer over SSH.
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y iperf3 python3
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iperf3 python3
 cd ~/tsn-sdk/examples/tas_cbs
 ```
+
+On a fresh Ubuntu 24.04 install, this accepts the default and leaves the iperf3 daemon off. Start the receiver manually as shown in Run A. An existing debconf selection is reused.
 
 All commands below are run in this folder (`examples/tas_cbs`). The board is configured with `../common/tsnctl.py`, which is included in this repository (see [`../README.md`](../README.md)).
 

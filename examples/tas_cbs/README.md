@@ -49,6 +49,11 @@ sudo python3 ../common/tsnctl.py sync
 
 ## 3. Run A: bandwidth measurement
 
+Check that both hosts can ping each other through their TSN port 1 IP
+addresses. The sender needs a TCP connection to the receiver's iperf3
+server to start each UDP measurement. A control connection timeout leaves
+that run without a bandwidth result.
+
 1. In terminal 1 of the receiver, start an iperf3 server. On a TSN HAT, keep it off CPU0 (see "Notes" in `../README.md`). This server is also used in run B; keep it running until the end.
 
    ```sh

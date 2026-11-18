@@ -15,7 +15,7 @@ All board settings are made over PCIe. No USB/UART cable is needed.
 - Hardware: two TSN boards (TSN HAT + Raspberry Pi 5, or TSN NIC in a PC), connected through a 1 GbE switch.
   For time-synchronized examples, the switch must support IEEE 802.1AS (see "gPTP time synchronization" below).
 - FPGA image: checked with FPGA image v3.5 (`"fw_id": "0x20261035"` in `tsnctl.py status`). `tas_cbs_demo.py` accepts only this fw_id.
-- Operating system: tested on Raspberry Pi OS (64-bit) on the Raspberry Pi 5. Ubuntu on the Raspberry Pi 5 and its kernel headers have not yet been verified; this README will be updated after verification. On other images, check the boot configuration path and build the driver for your kernel.
+- Operating system: Raspberry Pi OS or Ubuntu 24.04 LTS (64-bit) on the Raspberry Pi 5. Build the driver against the headers for the running kernel.
 - Driver: the XDMA driver in this repository (`driver/XDMA/linux-kernel`), loaded with `se_mode=1` (see "Installation" below and [`README_TSN_HAT.md`](../driver/XDMA/linux-kernel/README_TSN_HAT.md)).
 - Python 3.9 or later (`python3 --version`). The Python shipped with Raspberry Pi OS is sufficient.
   The Python programs use only the standard library.
@@ -52,15 +52,19 @@ Run the following on both hosts. All commands assume the repository is cloned in
 
    ```sh
    sudo apt-get update
-   sudo apt-get install -y git pciutils iproute2 kmod build-essential linux-headers-$(uname -r) python3
+   sudo apt-get install -y git pciutils iproute2 kmod build-essential "linux-headers-$(uname -r)" python3
+   test -f "/lib/modules/$(uname -r)/build/Makefile"
    ```
 
-   Each example README lists the additional packages it needs (GStreamer, iperf3).
+   Each example README lists its additional packages (GStreamer, iperf3).
+   If the running kernel's header package is missing, follow the
+   [kernel header guidance](../driver/XDMA/linux-kernel/README_TSN_HAT.md#3-드라이버-빌드와-적재).
 
-2. Raspberry Pi 5 only: add the line `dtparam=pciex1` to `/boot/firmware/config.txt`, reboot, and check that the TSN HAT is detected. The output must contain `[10ee:7024]`.
+2. Raspberry Pi 5 only: enable external PCIe with `dtparam=pciex1` in `/boot/firmware/config.txt`.
+   Reboot after changing that file, then check for PCI ID `10ee:7021` or `10ee:7024`.
 
    ```sh
-   lspci -nn | grep 10ee
+   lspci -nn -d 10ee:
    ```
 
 3. Clone the repository, build the driver and load it.
@@ -70,7 +74,7 @@ Run the following on both hosts. All commands assume the repository is cloned in
    git clone https://github.com/tsnlab/tsn-sdk.git
    cd ~/tsn-sdk/driver/XDMA/linux-kernel/xdma
    make
-   sudo insmod xdma.ko
+   sudo insmod xdma.ko se_mode=1
    ```
 
    The default module parameters are the recommended values (see the parameter table in the driver README). To load the driver at every boot, use the DKMS installation described in the driver README.
@@ -83,11 +87,16 @@ Run the following on both hosts. All commands assume the repository is cloned in
    sudo dmesg | grep "netdev MAC from board DNA"
    ```
 
-5. Give `eth1` an IP address (`192.0.2.10` on one host and `192.0.2.20` on the other in these examples; use addresses of your own network).
+5. Find the Linux name for TSN port 1 using the
+   [interface discovery step](../driver/XDMA/linux-kernel/README_TSN_HAT.md#3-드라이버-빌드와-적재).
+   Substitute that name for `eth1` in the examples. Give the interfaces
+   addresses on the same subnet. The sample uses `192.0.2.10` and `192.0.2.20`.
 
    ```sh
-   sudo ip addr add 192.0.2.10/24 dev eth1
-   sudo ip link set eth1 up
+   iface=enp1s0d1  # use the name you found
+   sudo ip addr add 192.0.2.10/24 dev "$iface"
+   sudo ip link set "$iface" up
+   ip link show dev "$iface"
    ```
 
 ## Working directory

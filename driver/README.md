@@ -6,21 +6,25 @@ For Xilinx DMA IP Reference drivers, see Xilinx DMA IP Reference drivers below.
 TSNLAB XDMA is in subdirectory XDMA/linux-kernel.
 Go to the XDMA/linux-kernel directory and see the readme.txt file.
 
-## SE images with 8-byte DMA padding
+## SE driver installation
 
-Use the DMA mode specified for your FPGA image. A PCI ID such as `10ee:7021`
-or `10ee:7024` identifies a supported device but does not select its DMA mode.
-For an SE Gen2 x1 image that requires 8-byte DMA transfers, load the driver
-with the alignment option:
+Follow the [Raspberry Pi 5 installation guide](XDMA/linux-kernel/README_TSN_HAT.md)
+for kernel headers, PCIe setup and module loading. In SE mode the driver uses
+8-byte DMA alignment by default. This covers the SE-HP HAT C1 (Gen2 x1) image,
+which requires aligned transfers. You can confirm the C1 image in the HAT's
+release information. A PCI device ID or negotiated link width alone does not
+identify the FPGA image.
 
-```sh
-sudo insmod xdma.ko se_mode=1 tx_h2c_align=1
-```
+The driver preserves the Ethernet frame length and removes receive padding
+when the DMA length and frame metadata agree. SE network interfaces reflect
+the physical link while administratively up. Use the current `tsnctl.py link`
+to read the PHY when the driver manages it.
 
-For other images, omit `tx_h2c_align` (the default is off). The driver aligns
-the DMA source address and transfer length while keeping the original Ethernet
-frame length. It removes the matching receive-side padding before passing the
-frame to Linux. Set `tx_h2c_align` and `tx_bounce` when loading the module.
+### Troubleshooting
+
+For a diagnostic comparison, `tx_h2c_align=0` restores the unaligned path.
+Keep the default for normal C1 operation. The DMA options take effect at
+module load time. The alignment path uses coherent slots automatically.
 
 #
 

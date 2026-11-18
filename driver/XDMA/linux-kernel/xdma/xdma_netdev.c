@@ -138,11 +138,11 @@ static inline void xdma_engine_stop_sync(struct xdma_engine *engine)
 	pr_warn_ratelimited("xdma: engine busy after stop (200us)\n");
 }
 
-/* Only enable this for SE images that require 8-byte DMA alignment/padding. */
-static bool tx_h2c_align;
+/* Use aligned transfers in SE mode, including on the SE Gen2 x1 image. */
+static bool tx_h2c_align = true;
 module_param(tx_h2c_align, bool, 0444);
 MODULE_PARM_DESC(tx_h2c_align,
-                 "SE x1: align H2C descriptors and trim C2H DMA padding");
+                 "SE mode: align H2C descriptors and trim C2H DMA padding (default on)");
 
 static bool xdma_se_dma_padding(void)
 {

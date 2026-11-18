@@ -92,10 +92,11 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
    SE 모드에서 8바이트 DMA 정렬이 자동으로 적용된다. SE-HP HAT C1(Gen2 x1)은
    이 정렬을 필요로 한다. HAT에 제공된 릴리스 정보로 C1 여부를 확인할 수 있다.
 
-5. PCI 주소 아래에서 Linux 인터페이스 이름을 확인하십시오. 예시의 `0000:01:00.0`을
+5. `udevadm settle`이 끝나면 PCI 주소 아래에서 Linux 인터페이스 이름을 확인하십시오. 예시의 `0000:01:00.0`을
    `lspci`에 표시된 주소로 바꾸십시오. `dev_port`가 1인 인터페이스가 HAT 포트 1이다.
 
    ```sh
+   udevadm settle
    for dev in /sys/bus/pci/devices/0000:01:00.0/net/*; do
        printf '%s %s\n' "${dev##*/}" "$(cat "$dev/dev_port")"
    done

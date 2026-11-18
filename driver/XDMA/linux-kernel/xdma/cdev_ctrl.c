@@ -23,6 +23,7 @@
 #include "version.h"
 #include "xdma_cdev.h"
 #include "cdev_ctrl.h"
+#include "se_phy.h"
 
 #if ACCESS_OK_2_ARGS
 #define xlx_access_ok(X, Y, Z) access_ok(Y, Z)
@@ -78,6 +79,8 @@ static ssize_t char_ctrl_write(struct file *file, const char __user *buf,
 	if (rv < 0)
 		return rv;
 	xdev = xcdev->xdev;
+	if (xcdev->bar == 0 && xdma_se_mdio_owned_offset(*pos))
+		return -EBUSY;
 
 	/* only 32-bit aligned and 32-bit multiples */
 	if (*pos & 3)

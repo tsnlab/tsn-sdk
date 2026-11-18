@@ -116,6 +116,10 @@ struct xdma_private_common {
         sysclock_t last_tx_tstamp[TSN_TIMESTAMP_ID_MAX];
 
         struct delayed_work rx_poll_work;
+        struct delayed_work phy_poll;
+        struct mutex phy_lock;
+        unsigned long phy_open_mask;
+        int phy_addr[XDMA_NUM_PORTS];
         unsigned long last_switch_jiffies;
 
         bool is_running;

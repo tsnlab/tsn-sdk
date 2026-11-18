@@ -20,8 +20,8 @@ TSN 기능은 TSN HAT의 USB-C UART로 설정한다. 4절을 참조하십시오.
 | 항목 | 값 |
 |---|---|
 | 보드 | Raspberry Pi 5 + TSN HAT R2 (PCIe FFC 케이블) |
-| 운영체제 | Raspberry Pi OS (Debian 13 trixie, 64비트) |
-| 커널 | `6.12.47+rpt-rpi-2712` |
+| 운영체제 | Raspberry Pi OS (Debian 13 trixie, 64비트), Ubuntu 24.04 LTS (64비트) |
+| 검증한 커널 | Raspberry Pi OS `6.12.47+rpt-rpi-2712`, Ubuntu `6.8.0-1068-raspi` |
 
 커널 버전이 다르면 그 버전의 커널 헤더로 드라이버를 다시 빌드하십시오.
 
@@ -30,24 +30,21 @@ TSN 기능은 TSN HAT의 USB-C UART로 설정한다. 4절을 참조하십시오.
 ## 2. Raspberry Pi 설정
 
 1. `/boot/firmware/config.txt`를 여십시오.
-2. 다음 줄을 추가하십시오.
+2. PCIe를 아직 활성화하지 않았다면 다음 줄을 추가하십시오.
 
    ```
    dtparam=pciex1
    ```
 
-3. Raspberry Pi를 재부팅하십시오.
+3. 설정을 변경했다면 Raspberry Pi를 재부팅하십시오.
 4. Raspberry Pi가 TSN HAT을 인식하는지 확인하십시오.
 
    ```
-   lspci -nn | grep 10ee
+   lspci -nn -d 10ee:
    ```
 
-   출력에 다음 장치가 있어야 한다.
-
-   ```
-   0001:01:00.0 Ethernet controller [0200]: Xilinx Corporation Device [10ee:7024]
-   ```
+   TSN HAT의 지원 PCI ID는 `10ee:7021` 또는 `10ee:7024`이다.
+   출력 첫 열의 PCI 주소로 해당 보드의 네트워크 인터페이스를 찾을 수 있다.
 
 장치가 보이지 않으면 다음 절차를 수행하십시오.
 
@@ -63,8 +60,15 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 1. 빌드 도구와 커널 헤더를 설치하십시오.
 
    ```
-   sudo apt install -y build-essential linux-headers-$(uname -r)
+   sudo apt update
+   sudo apt install -y --no-upgrade git pciutils iproute2 kmod build-essential "linux-headers-$(uname -r)"
+   test -f "/lib/modules/$(uname -r)/build/Makefile"
    ```
+
+   Ubuntu 저장소에 실행 커널의 헤더가 없으면 `apt-cache policy "linux-headers-$(uname -r)"`로
+   후보를 확인하십시오. 배포판이 제공하는 검증된 아카이브에서 정확히 일치하는 커널 헤더를
+   구하거나, 헤더를 함께 제공하는 지원 커널로 업데이트하고 재부팅한 뒤 다시 확인하십시오.
+   설치 전에 패키지 출처와 실행 커널 버전·아키텍처를 대조하십시오.
 
 2. 소스를 받으십시오.
 
@@ -82,17 +86,29 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 4. 드라이버를 적재하십시오.
 
    ```
-   sudo insmod xdma.ko
-
-   기본값이 권장값이다. 파라미터는 아래 표를 참조하십시오.
+   sudo insmod xdma.ko se_mode=1
    ```
 
-5. 인터페이스 `eth1`과 `eth2`가 생겼는지 확인하십시오. `eth0`은 Raspberry Pi 내장 포트이다.
+   SE 모드에서 8바이트 DMA 정렬이 자동으로 적용된다. SE-HP HAT C1(Gen2 x1)은
+   이 정렬을 필요로 한다. HAT에 제공된 릴리스 정보로 C1 여부를 확인할 수 있다.
+
+5. `udevadm settle`이 끝나면 PCI 주소 아래에서 Linux 인터페이스 이름을 확인하십시오. 예시의 `0000:01:00.0`을
+   `lspci`에 표시된 주소로 바꾸십시오. `dev_port`가 1인 인터페이스가 HAT 포트 1이다.
+
+   ```sh
+   udevadm settle
+   for dev in /sys/bus/pci/devices/0000:01:00.0/net/*; do
+       printf '%s %s\n' "${dev##*/}" "$(cat "$dev/dev_port")"
+   done
+   ```
+
 6. IP 주소를 설정하고 인터페이스를 켜십시오. 다음은 예시이다.
 
    ```
-   sudo ip addr add 192.168.100.10/24 dev eth1
-   sudo ip link set eth1 up
+   iface=enp1s0d1  # 5단계에서 확인한 포트 1 이름
+   sudo ip addr add 192.0.2.10/24 dev "$iface"
+   sudo ip link set "$iface" up
+   ip link show dev "$iface"
    ```
 
 부팅할 때마다 드라이버를 적재하려면 DKMS로 설치하십시오. DKMS는 커널을 갱신할 때 드라이버를 다시 빌드한다.
@@ -125,6 +141,7 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 | 파라미터 | 권장값 | 기능 |
 |---|---|---|
 | `se_mode` | 1 | TSN HAT 데이터 경로를 사용한다. 셰이핑, 송신 타임스탬프, FRER는 TSN HAT이 처리한다. 0으로 바꾸지 마십시오. |
+| `se_phy_poll` | 1 | SE 모드에서 물리 링크를 읽어 Linux carrier를 갱신한다. 적재 시 지정한다. |
 | `rx_poll_mode` | 0 | 인터럽트로 수신한다. 값이 1이면 폴링으로 수신하고 처리량이 크게 떨어진다. |
 | `pmac_rx_enable` | 1 | 프레임 선점(802.3br) 수신 경로를 사용한다. |
 | `tx_prefetch` | 1 | 송신 디스크립터를 미리 읽는다. 작은 프레임의 처리량이 올라간다. |

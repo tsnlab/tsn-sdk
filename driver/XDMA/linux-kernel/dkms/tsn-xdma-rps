@@ -1,0 +1,25 @@
+#!/bin/sh
+# Select CPU1-3 for receive processing on the TSN-SE XDMA interfaces.
+set -eu
+
+[ "$#" -eq 1 ] || exit 1
+case "$1" in
+    ''|.|..|*/*) exit 1 ;;
+esac
+net="/sys/class/net/$1"
+
+[ -r /sys/module/xdma/parameters/se_mode ] || exit 0
+read -r se_mode < /sys/module/xdma/parameters/se_mode
+[ "$se_mode" = 1 ] || exit 0
+
+# A net add event can arrive before the RX queue attributes appear.
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    [ -d "$net" ] || exit 0
+    set -- "$net"/queues/rx-*/rps_cpus
+    [ -f "$1" ] && break
+    sleep 0.05
+done
+[ -f "$1" ] || exit 1
+for mask in "$@"; do
+    printf 'e\n' > "$mask"
+done

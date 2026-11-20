@@ -1,0 +1,3 @@
+# Apply the TSN-SE receive CPU mask on network-device registration and renaming.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="xdma", RUN+="/usr/lib/udev/tsn-xdma-rps %k"
+ACTION=="move", SUBSYSTEM=="net", DRIVERS=="xdma", RUN+="/usr/lib/udev/tsn-xdma-rps %k"

@@ -15,7 +15,8 @@
 #   3. dkms add, build, install 을 한다. 빌드 뒤 check_nofpu.sh 로 SIMD 사용을 검사한다.
 #   4. /etc/modprobe.d/tsn-xdma.conf 를 쓴다. 내용이 다른 기존 파일은 /var/backups 에 보관한다.
 #   5. /etc/modules-load.d/tsn-xdma.conf 에 xdma 를 쓴다(부팅 시 자동 적재).
-#   6. 대상 커널의 initramfs 를 갱신한다.
+#   6. TSN-SE 수신 큐의 RPS 마스크를 적용하는 udev 규칙을 설치한다.
+#   7. 대상 커널의 initramfs 를 갱신한다.
 # 여러 번 실행해도 결과가 같다.
 set -euo pipefail
 
@@ -26,6 +27,8 @@ UNINSTALL=0
 
 MODPROBE_CONF="/etc/modprobe.d/tsn-xdma.conf"
 MODLOAD_CONF="/etc/modules-load.d/tsn-xdma.conf"
+RPS_RULE="/etc/udev/rules.d/90-tsn-xdma-rps.rules"
+RPS_HELPER="/usr/lib/udev/tsn-xdma-rps"
 BACKUP_DIR="/var/backups"
 DKMS_TREE="/var/lib/dkms"
 
@@ -107,6 +110,12 @@ write_file() {
 	log "$file 을 썼습니다."
 }
 
+reload_udev_rules() {
+	if [ -S /run/udev/control ] && command -v udevadm >/dev/null 2>&1; then
+		udevadm control --reload-rules
+	fi
+}
+
 update_initramfs() {
 	local k="$1"
 	if command -v update-initramfs >/dev/null 2>&1; then
@@ -142,7 +151,7 @@ do_uninstall() {
 		rm -rf "$v"
 		log "$v 를 지웠습니다."
 	done
-	for f in "$MODPROBE_CONF" "$MODLOAD_CONF"; do
+	for f in "$MODPROBE_CONF" "$MODLOAD_CONF" "$RPS_RULE" "$RPS_HELPER"; do
 		if [ -f "$f" ]; then
 			mkdir -p "$BACKUP_DIR"
 			cp -p "$f" "$BACKUP_DIR/$(basename "$f").$(date +%Y%m%d-%H%M%S).uninstall.bak"
@@ -150,6 +159,7 @@ do_uninstall() {
 			log "$f 를 지웠습니다(사본은 $BACKUP_DIR)."
 		fi
 	done
+	reload_udev_rules
 	for k in /lib/modules/*/; do
 		k="$(basename "$k")"
 		[ -d "/lib/modules/$k/kernel" ] && kernels+=("$k")
@@ -186,7 +196,7 @@ fi
 log "버전 $VERSION, 대상 커널: ${KERNELS[*]}"
 
 # 1. 소스를 /usr/src 로 복사한다. 빌드 산출물은 넣지 않는다.
-for p in xdma include dkms.conf dkms/check_nofpu.sh; do
+for p in xdma include dkms.conf dkms/check_nofpu.sh dkms/90-tsn-xdma-rps.rules dkms/tsn-xdma-rps; do
 	[ -e "$DRIVER_DIR/$p" ] || die "소스에 $p 가 없습니다: $DRIVER_DIR"
 done
 rm -rf "$SRC_DIR"
@@ -258,7 +268,14 @@ write_file "$MODPROBE_CONF" "$MODPROBE_CONTENT"
 # 5. 부팅 시 자동 적재.
 write_file "$MODLOAD_CONF" "xdma"
 
-# 6. initramfs 갱신.
+# 6. TSN-SE 포트가 등록될 때 CPU1-3으로 수신 처리를 분산한다.
+backup_if_differs "$RPS_HELPER" "$SCRIPT_DIR/tsn-xdma-rps"
+install -D -m 0755 "$SCRIPT_DIR/tsn-xdma-rps" "$RPS_HELPER"
+backup_if_differs "$RPS_RULE" "$SCRIPT_DIR/90-tsn-xdma-rps.rules"
+install -D -m 0644 "$SCRIPT_DIR/90-tsn-xdma-rps.rules" "$RPS_RULE"
+reload_udev_rules
+
+# 7. initramfs 갱신.
 for k in "${KERNELS[@]}"; do
 	update_initramfs "$k"
 done

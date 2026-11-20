@@ -21,6 +21,30 @@ static uint rx_ts_gptp = 1;
 module_param(rx_ts_gptp, uint, 0644);
 MODULE_PARM_DESC(rx_ts_gptp, "se_mode RX hwtstamp: 1 = gPTP time (curtime + RTC offset, default), 0 = raw curtime");
 
+/* Continuous receive credits apply to the streaming TSN-SE C2H channel. */
+static bool rx_ring_credits = true;
+module_param(rx_ring_credits, bool, 0444);
+MODULE_PARM_DESC(rx_ring_credits, "Use a continuous credit-gated TSN-SE RX ring");
+
+#define RX_RING_CREDIT_RESERVE 16
+
+static bool xdma_rx_uses_credits(const struct xdma_private_common *common)
+{
+        return rx_ring_credits && se_mode && common->rx_engine->streaming;
+}
+
+static bool xdma_rx_credit_mode(struct xdma_engine *engine, bool enable)
+{
+        struct xdma_dev *xdev = engine->xdev;
+        struct sgdma_common_regs *regs = xdev->bar[xdev->config_bar_idx] +
+                                       6 * TARGET_SPACING;
+        u32 mask = BIT(16 + engine->channel);
+
+        iowrite32(mask, enable ? &regs->credit_mode_enable_w1s :
+                                &regs->credit_mode_enable_w1c);
+        return !!(ioread32(&regs->credit_mode_enable) & mask) == enable;
+}
+
 /* S2(2026-08-14): H2C 디스크립터 인접 프리페치. 2-1 규명(소프레임 TX는 per-desc
  * PCIe 왕복지연 바운드, x86 루트콤플렉스 지연이 x1 HAT보다 큼)의 실행편. 엔진이
  * 인접 디스크립터를 한 요청으로 블록 fetch하면 여러 프레임의 payload read를 다중
@@ -535,6 +559,47 @@ static bool filter_rx_timestamp(struct xdma_private_common *common, struct sk_bu
 }
 
 /*
+ * The immutable descriptors loop through the ring. Each credit authorizes
+ * exactly one fetch. Keep a reserve and publish only slots the consumer has
+ * returned to DMA ownership. Do not rewrite a live descriptor or stop the
+ * engine merely because one batch of credits has completed.
+ */
+static void xdma_rx_ring_replenish(struct xdma_private_common *common)
+{
+        struct xdma_engine *engine = common->rx_engine;
+        u32 pending = common->rx_head - common->rx_tail;
+        u32 limit = RX_RING_SIZE - RX_RING_CREDIT_RESERVE;
+        u32 available;
+
+        if (!common->open_cnt || pending >= limit)
+                return;
+
+        available = limit - pending;
+        if (!common->rx_run_len) {
+                dma_addr_t bus = rx_ring_desc_bus(common, common->rx_head);
+                u32 i;
+
+                if (!xdma_rx_credit_mode(engine, true)) {
+                        pr_err_ratelimited("xdma: C2H credit enable did not latch\n");
+                        return;
+                }
+                for (i = 0; i < RX_RING_SIZE; i++)
+                        common->rx_res[i].status = 0;
+                dma_wmb();
+                ioread32(&engine->regs->status_rc);
+                iowrite32(PCI_DMA_L(bus), &engine->sgdma_regs->first_desc_lo);
+                iowrite32(PCI_DMA_H(bus), &engine->sgdma_regs->first_desc_hi);
+                iowrite32(0, &engine->sgdma_regs->first_desc_adjacent);
+                iowrite32(DMA_ENGINE_START, &engine->regs->control);
+                common->rx_run_len = limit; /* Continuous run is active. */
+        }
+
+        dma_wmb();
+        iowrite32(available, &engine->sgdma_regs->credits);
+        common->rx_head += available;
+}
+
+/*
  * 빈 슬롯([rx_head, rx_tail+RING) 구간)을 체인으로 묶어 엔진에 1회 START 제출.
  * rx_lock 보유 + 엔진 유휴(rx_run_len==0) 전제. 각 desc는 COMPLETED(프레임당
  * IRQ), 마지막만 STOPPED(링 추월 방지 — SW가 밀리면 엔진이 멈추고 FPGA FIFO가
@@ -712,7 +777,15 @@ static int xdma_rx_napi_poll(struct napi_struct *napi, int budget)
         }
 
         spin_lock_irqsave(&common->rx_lock, flags);
-        if (common->rx_run_len) {
+        if (xdma_rx_uses_credits(common)) {
+                status = ioread32(&engine->regs->status_rc);
+                if (unlikely(status & (XDMA_STAT_COMMON_ERR_MASK | XDMA_STAT_DESC_STOPPED))) {
+                        pr_err_ratelimited("xdma: continuous C2H stopped (status 0x%08x)\n",
+                                           status);
+                } else {
+                        xdma_rx_ring_replenish(common);
+                }
+        } else if (common->rx_run_len) {
                 status = ioread32(&engine->regs->status_rc);    /* read-clear */
                 cmpl = ioread32(&engine->regs->completed_desc_count);
                 if ((status & XDMA_STAT_DESC_STOPPED) || cmpl >= common->rx_run_len) {
@@ -783,7 +856,8 @@ int xdma_rx_ring_alloc(struct xdma_private_common *common)
                 dma_addr_t buf = common->rx_bufs_bus +
                                  (dma_addr_t)i * XDMA_RX_BUFFER_SIZE;
 
-                desc->control = cpu_to_le32(DESC_MAGIC | XDMA_DESC_STOPPED);
+                desc->control = cpu_to_le32(DESC_MAGIC |
+                        (xdma_rx_uses_credits(common) ? XDMA_DESC_COMPLETED : XDMA_DESC_STOPPED));
                 desc->bytes = cpu_to_le32(XDMA_RX_BUFFER_SIZE);
                 /* C2H ST: src_addr = 슬롯별 writeback 결과 주소 */
                 desc->src_addr_lo = cpu_to_le32(PCI_DMA_L(res));
@@ -836,7 +910,10 @@ void xdma_rx_ring_start(struct xdma_private_common *common)
         unsigned long flags;
 
         spin_lock_irqsave(&common->rx_lock, flags);
-        xdma_rx_ring_kick(common);
+        if (xdma_rx_uses_credits(common))
+                xdma_rx_ring_replenish(common);
+        else
+                xdma_rx_ring_kick(common);
         spin_unlock_irqrestore(&common->rx_lock, flags);
 }
 
@@ -848,7 +925,13 @@ void xdma_rx_ring_stop(struct xdma_private_common *common)
 
         napi_disable(&common->rx_napi);         /* 진행 중 수확 완료 대기 */
         spin_lock_irqsave(&common->rx_lock, flags);
-        iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+        if (xdma_rx_uses_credits(common)) {
+                xdma_engine_stop_sync(engine);
+                if (!xdma_rx_credit_mode(engine, false))
+                        pr_err_ratelimited("xdma: C2H credit disable did not latch\n");
+        } else {
+                iowrite32(DMA_ENGINE_STOP, &engine->regs->control);
+        }
         ioread32(&engine->regs->status_rc);
         common->rx_run_len = 0;
         common->rx_tail = common->rx_head;

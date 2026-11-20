@@ -140,7 +140,8 @@ TSN HAT은 Raspberry Pi에서 전원을 받는다.
 
 4. 6단계와 같이 IP 주소를 설정하십시오.
 
-`install.sh`는 권장 파라미터를 `/etc/modprobe.d/tsn-xdma.conf`에 쓴다. 제거하려면 `sudo ./install.sh --uninstall`을 실행하십시오.
+`install.sh`는 권장 파라미터를 `/etc/modprobe.d/tsn-xdma.conf`에 쓴다. TSN-SE 모드에서는 RX credit이 기본으로 켜진다. DKMS 설치 시 udev 규칙이
+TSN-SE 인터페이스의 각 수신 큐에 RPS 마스크 `e`(CPU1~3)를 적용한다. 제거하려면 `sudo ./install.sh --uninstall`을 실행하십시오.
 
 ### 모듈 파라미터
 

@@ -129,11 +129,11 @@ def egress_ok(iface, egress, sys_net=SYS_NET):
         uevent = open(os.path.join(base, "uevent"), encoding="utf-8").read().split()
         lowers = sorted(x for x in os.listdir(base) if x.startswith("lower_"))
     except OSError:
-        return False, f"{egress} 의 sysfs 정보를 읽지 못했습니다"
+        return False, f"Could not read sysfs information for {egress}"
     if "DEVTYPE=vlan" not in uevent:
-        return False, f"{egress} 는 VLAN 장치가 아닙니다(bridge·bond 등 다른 위 장치는 지원하지 않음)"
+        return False, f"{egress} is not a VLAN interface (bridges, bonds, and other upper devices are unsupported)"
     if lowers != [f"lower_{iface}"]:
-        return False, f"{egress} 의 아래 장치가 {iface} 하나가 아닙니다({lowers})"
+        return False, f"{egress} must have {iface} as its only lower interface (found {lowers})"
     return True, f"vlan over {iface}"
 
 
@@ -184,26 +184,30 @@ def write_record(out, rec):
 
 
 def main():
-    p = argparse.ArgumentParser(description="RTP 송신 중계: L1 gPTP 시각 헤더 확장")
-    p.add_argument("--dest", required=True, help="수신 보드 IP")
-    p.add_argument("--port", type=int, default=5000, help="수신 UDP 포트(수신 쪽 gst_recv.sh·rtp_stats.py 와 같게)")
-    p.add_argument("--listen-port", type=int, default=5004, help="gst_send.sh 가 보내는 루프백 UDP 포트")
-    p.add_argument("--ext-id", type=int, default=1, help="RTP 헤더 확장 로컬 ID(1~14). 수신 쪽 --l1-ext-id 와 같게")
-    p.add_argument("--iface", required=True, help="시각을 읽을 보드 netdev(예 eth1)")
-    p.add_argument("--egress-dev", help="송신 소켓을 묶을 장치(기본 = --iface, VLAN 이면 예 eth1.10)")
-    p.add_argument("--seconds", type=float, default=0, help="0 = 끝까지(Ctrl+C)")
-    p.add_argument("--acq-id", required=True, help="이 회차 이름(영문·숫자·_.-, 64 자 이하). 수신 rtp_stats.py --acq-id 와 같게")
-    p.add_argument("--json", required=True, help="이 회차 송신 기록(l1_finalize.py 입력). 이미 있으면 시작하지 않는다")
-    p.add_argument("--dev", help="보드 장치(/dev/xdmaN_user). 주면 --iface 와 같은 보드인지 확인한다")
+    p = argparse.ArgumentParser(description="Relay RTP and tag packets with the L1 gPTP timestamp extension")
+    p.add_argument("--dest", required=True, help="receiver board IP address")
+    p.add_argument("--port", type=int, default=5000, help="receiver UDP port, matching gst_recv.sh and rtp_stats.py")
+    p.add_argument("--listen-port", type=int, default=5004, help="loopback UDP port used by gst_send.sh")
+    p.add_argument("--ext-id", type=int, default=1,
+                   help="local RTP header extension ID (1-14), matching the receiver's --l1-ext-id")
+    p.add_argument("--iface", required=True, help="board interface from which to read time (e.g. eth1)")
+    p.add_argument("--egress-dev",
+                   help="bind the send socket to this interface (default: --iface; e.g. eth1.10 for VLAN traffic)")
+    p.add_argument("--seconds", type=float, default=0, help="0: run until interrupted with Ctrl+C")
+    p.add_argument("--acq-id", required=True,
+                   help="capture ID, up to 64 ASCII letters, digits, underscores, dots, or hyphens; "
+                        "match the receiver's --acq-id")
+    p.add_argument("--json", required=True, help="write the sender record for l1_finalize.py; the file must not exist")
+    p.add_argument("--dev", help="board device (/dev/xdmaN_user); it must match the board selected by --iface")
     a = p.parse_args()
     if not 1 <= a.ext_id <= 14:
-        sys.exit("--ext-id 는 1~14 입니다(RFC 8285 one-byte header).")
+        sys.exit("--ext-id must be between 1 and 14 (RFC 8285 one-byte header).")
     if not ACQ_RE.match(a.acq_id):
-        sys.exit("--acq-id 는 영문·숫자·_.- 로 64 자 이하입니다.")
+        sys.exit("--acq-id must be up to 64 ASCII letters, digits, underscores, dots, or hyphens.")
     egress = a.egress_dev or a.iface
     ok, how = egress_ok(a.iface, egress)
     if not ok:
-        sys.exit(f"송신 장치 확인 실패: {how}")
+        sys.exit(f"Could not verify the send interface: {how}")
     try:
         res_out = l1_out.Out(a.json, owner={"tool": "rtp_l1_tag", "acq_id": a.acq_id})
     except l1_out.Busy as e:
@@ -212,7 +216,7 @@ def main():
            "board": None, "egress": {"dev": egress, "relation": how}, "dest": a.dest, "port": a.port, "listen_port": a.listen_port,
            "wall_start_utc": utc_now(), "wall_end_utc": None, "status_start": None, "status_end": None,
            "counts": None, "tagged_per_ssrc": None, "first_tag_gptp_ns": None, "last_tag_gptp_ns": None,
-           "tagged_per_ssrc_note": "sendto 전에 센 태그 시도 수(실제 성공 송신 수 아님). counts.send_errors 와 함께 본다",
+           "tagged_per_ssrc_note": "Tag attempts are counted before sendto. Interpret them together with counts.send_errors.",
            "stage": "setup", "error": None, "interrupted": False, "complete": False}
     cnt = {"received": 0, "sent": 0, "tagged": 0, "send_errors": 0}
     per_ssrc = {}
@@ -227,7 +231,8 @@ def main():
         bar = tsnctl.Bar(a.dev, iface=a.iface)        # 장치를 못 열면 SystemExit -> 미완 기록(호스트 시계로 대신 채우지 않음)
         rec["board"] = {"dev": bar.dev, "pci": bar.bdf, "iface": a.iface, "iface_pci": iface_pci(a.iface)}
         if a.dev and rec["board"]["iface_pci"] != bar.bdf:
-            raise RuntimeError(f"--dev {a.dev}(PCIe {bar.bdf}) 와 --iface {a.iface}(PCIe {rec['board']['iface_pci']}) 가 다른 보드입니다")
+            raise RuntimeError(f"--dev {a.dev} (PCIe {bar.bdf}) and --iface {a.iface} "
+                               f"(PCIe {rec['board']['iface_pci']}) select different boards")
         run = int.from_bytes(os.urandom(4), "big")
         rec["run"] = f"{run:08x}"
         rec["status_start"] = status(bar, a.iface)
@@ -242,7 +247,8 @@ def main():
         tx.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, egress.encode() + b"\0")
         rec["stage"] = "relay"
         t_end = time.monotonic() + a.seconds if a.seconds else None
-        print(f"중계 시작: 127.0.0.1:{a.listen_port} -> {a.dest}:{a.port} ({egress}), 확장 ID {a.ext_id}, run {run:08x}, 회차 {a.acq_id}", flush=True)
+        print(f"Relay ready: 127.0.0.1:{a.listen_port} -> {a.dest}:{a.port} ({egress}), "
+              f"extension ID {a.ext_id}, run {run:08x}, capture {a.acq_id}", flush=True)
         try:
             while t_end is None or time.monotonic() < t_end:
                 try:
@@ -289,19 +295,20 @@ def main():
         intr = c_intr
         rec["stage"] = "cleanup"
     if err is None and box["extra_interrupts"]:     # 정상 끝의 정리 중 첫 Ctrl+C(실제 신호) = 이 회차의 취소 원인
-        err = "stage cleanup: KeyboardInterrupt: 정리 중 첫 Ctrl+C(SIGINT)"
+        err = "stage cleanup: KeyboardInterrupt: first Ctrl+C (SIGINT) during cleanup"
         intr = finish_cause = True
         rec["stage"] = "cleanup"
     rec.update(counts=cnt, tagged_per_ssrc=per_ssrc, first_tag_gptp_ns=first_ns, last_tag_gptp_ns=last_ns,
                wall_end_utc=utc_now(), error=err, interrupted=intr, complete=err is None, cleanup_errors=cleanup_errs,
                cleanup_first_error_type=c_first, cleanup_first_error_cancel=c_intr,
                extra_interrupts_during_finish=box["extra_interrupts"], finish_interrupt_is_cause=finish_cause,
-               interrupt_count_boundary="기록 JSON 을 만들기 직전까지의 SIGINT 만 센다. 그 뒤(게시·해제 중)는 표준출력 after_record_interrupts")
+               interrupt_count_boundary="Counts SIGINT through record creation. Later interrupts during "
+                                        "publication and release appear as after_record_interrupts on stdout.")
     pub = None
     try:
         pub = write_record(res_out, rec)
     except (Exception, KeyboardInterrupt) as e:     # noqa: BLE001
-        pub = f"게시 중 {type(e).__name__}: {e}"
+        pub = f"Error during publication: {type(e).__name__}: {e}"
     finally:
         try:
             res_out.release()
@@ -310,7 +317,8 @@ def main():
         restore_sigint(old_sigint)
     after = box["after_record"]      # 처리기 복원 뒤의 Ctrl+C 는 기본 동작(이 도구가 세지 않음, 보장 밖)
     if pub is not True:     # 디스크에 기록 없음: 성공 요약을 내지 않고 게시 못 한 기록을 복구 근거로 표준출력에
-        print(json.dumps({"acq_id": a.acq_id, "published": False, "complete": False, "error": f"기록 게시 실패: {pub}",
+        print(json.dumps({"acq_id": a.acq_id, "published": False, "complete": False,
+                          "error": f"Could not publish the record: {pub}",
                           "record_path": a.json, "after_record_interrupts": after, "reservation_release": res_out.release_status,
                           "unpublished_record": rec}, ensure_ascii=False))
         sys.exit(3)

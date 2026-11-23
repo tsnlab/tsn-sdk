@@ -105,62 +105,62 @@ def sval(v):
 def check_gm(gm, gm_dir, tx, l1, max_skew_s):
     """수동 GM 근거 검사. (이유 목록, 원자료 SHA-256 또는 None)."""
     if gm is None:
-        return ["GM·domain 동일성 수동 근거 없음(상태 블록에 GM 식별자가 없음, --gm-evidence 필요)"], None
+        return ["Manual evidence is required to establish the same GM and domain (--gm-evidence); the status block has no GM identifier"], None
     if not isinstance(gm, dict):
-        return ["GM 근거가 객체가 아님"], None
+        return ["GM evidence is not an object"], None
     why = []
     if gm.get("schema") != GM_SCHEMA:
-        return [f"GM 근거 형식이 {GM_SCHEMA} 아님"], None
+        return [f"GM evidence format must be {GM_SCHEMA}"], None
     if sval(gm.get("acq_id")) is None or gm.get("acq_id") != tx.get("acq_id"):
-        why.append("GM 근거의 acq_id 가 문자열이 아니거나 이 회차와 다름")
+        why.append("GM evidence acq_id must be a string matching this capture")
     if sval(gm.get("run")) is None or gm.get("run") != tx.get("run"):
-        why.append("GM 근거의 run 이 문자열이 아니거나 이 회차와 다름")
+        why.append("GM evidence run must be a string matching this capture")
     if sval(gm.get("checked_by")) is None:
-        why.append("GM 근거에 확인한 사람(checked_by, 비어 있지 않은 문자열) 없음")
+        why.append("GM evidence requires a nonempty checked_by string")
     t = utc_epoch(gm.get("captured_at_utc"))
     w0, w1 = utc_epoch(tx.get("wall_start_utc")), utc_epoch(tx.get("wall_end_utc"))
     if t is None or w0 is None or w1 is None or not (w0 - max_skew_s <= t <= w1 + max_skew_s):
-        why.append(f"GM 근거 채취 시각이 송신 기록 시작·끝 ±{max_skew_s:.0f} s 밖이거나 없음")
+        why.append(f"GM evidence timestamp is missing or more than {max_skew_s:.0f} s outside the sender's recorded interval")
     src = gm.get("source") if isinstance(gm.get("source"), dict) else {}
     src_sha = None
     if not isinstance(gm.get("source"), dict):
-        why.append("GM 근거 source 가 객체가 아님")
+        why.append("GM evidence source is not an object")
     if sval(src.get("path")) is None or sval(src.get("sha256")) is None:
-        why.append("GM 근거 원자료(source.path·sha256, 비어 있지 않은 문자열) 없음")
+        why.append("GM evidence requires nonempty source.path and source.sha256 strings")
     else:
         p = src["path"] if os.path.isabs(src["path"]) else os.path.join(gm_dir, src["path"])
         try:
             with open(p, "rb") as f:
                 src_sha = hashlib.sha256(f.read()).hexdigest()
         except (OSError, ValueError):     # ValueError = 경로에 NUL 등
-            why.append("GM 근거 원자료 파일을 읽지 못함(없음·권한·잘못된 경로)")
+            why.append("Could not read the raw GM evidence file (missing, inaccessible, or invalid path)")
         if src_sha is not None and src_sha != str(src["sha256"]).lower():
-            why.append("GM 근거 원자료 SHA-256 이 다름")
+            why.append("Raw GM evidence SHA-256 does not match")
     sides = {}
     for name in ("sender", "receiver"):
         v = gm.get(name)
         if not isinstance(v, dict):
-            why.append(f"GM 근거 {name} 가 객체가 아님")
+            why.append(f"GM evidence {name} is not an object")
             continue
         bad = [k for k in GM_SIDE_KEYS if k != "domain" and sval(v.get(k)) is None]
         if bad:
-            why.append(f"GM 근거 {name} 의 {', '.join(bad)} 가 비어 있지 않은 문자열이 아님")
+            why.append(f"GM evidence {name}: {', '.join(bad)} must be nonempty strings")
             continue
         if not isinstance(v.get("domain"), int) or isinstance(v.get("domain"), bool):
-            why.append(f"GM 근거 {name}.domain 이 정수가 아님")
+            why.append(f"GM evidence {name}.domain must be an integer")
             continue
         sides[name] = {k: (sval(v[k]) if k != "domain" else v[k]) for k in GM_SIDE_KEYS}
     if len(sides) == 2:
         snd, rcv = sides["sender"], sides["receiver"]
         for k in ("gm_identity", "domain", "profile", "timescale"):
             if snd[k] != rcv[k]:
-                why.append(f"GM 근거 {k} 가 두 보드에서 다름")
+                why.append(f"GM evidence {k} differs between the two boards")
         board = tx.get("board") or {}
         if snd["board_pci"] != board.get("pci") or snd["iface"] != board.get("iface"):
-            why.append("GM 근거 sender 보드가 송신 기록 보드와 다름")
+            why.append("GM evidence identifies a sender board different from the sender record")
         rst = l1.get("status_start") or {}
         if rcv["board_pci"] != rst.get("pci") or rcv["iface"] != l1.get("rx_iface"):
-            why.append("GM 근거 receiver 보드가 수신 기록 보드와 다름")
+            why.append("GM evidence identifies a receiver board different from the receiver record")
     return why, src_sha
 
 
@@ -178,58 +178,58 @@ def record_errors(rx, tx):
     송신 오류 수(send_errors)·누락은 여기서 불합격으로 보지 않는다(정수 형식만 본다, 전체 흐름 합격 기준 아님)."""
     why = []
     if not isinstance(tx, dict):
-        return ["송신 기록이 객체가 아님"]
+        return ["Sender record is not an object"]
     if not isinstance(rx, dict) or not isinstance(rx.get("l1"), dict):
-        return ["수신 기록 또는 그 l1 이 객체가 아님"]
+        return ["Receiver record or its l1 field is not an object"]
     l1 = rx["l1"]
-    for name, r in (("송신", tx), ("수신", l1)):
+    for name, r in (("Sender", tx), ("Receiver", l1)):
         if r.get("complete") is not True:
-            why.append(f"{name} 기록 complete 가 True 아님({r.get('complete')!r})")
+            why.append(f"{name} record complete must be True ({r.get('complete')!r})")
         if r.get("error") is not None:
-            why.append(f"{name} 기록에 error 있음({str(r.get('error'))[:80]})")
+            why.append(f"{name} record reports an error ({str(r.get('error'))[:80]})")
         if r.get("stage") != "done":
-            why.append(f"{name} 기록 stage 가 done 아님({r.get('stage')!r})")
+            why.append(f"{name} record stage must be done ({r.get('stage')!r})")
         if not isinstance(r.get("ext_id"), int) or isinstance(r.get("ext_id"), bool):
-            why.append(f"{name} 기록 ext_id 가 정수 아님")
+            why.append(f"{name} record ext_id must be an integer")
         if not _str(r.get("acq_id")):
-            why.append(f"{name} 기록 acq_id 가 문자열 아님")
+            why.append(f"{name} record acq_id must be a string")
         for k in ("status_start", "status_end"):
             if r.get(k) is not None and not isinstance(r.get(k), dict):
-                why.append(f"{name} 기록 {k} 가 객체가 아님")
+                why.append(f"{name} record {k} is not an object")
             elif isinstance(r.get(k), dict) and status_counters(r[k]) is None:   # 상태 계수 자료형
-                why.append(f"{name} 기록 {k} 의 updates·resid.count 가 음 아닌 정수 아님")
+                why.append(f"{name} record {k} requires nonnegative integer updates and resid.count")
     if l1.get("interrupted") is not False:
-        why.append(f"수신 기록 interrupted 가 False 아님({l1.get('interrupted')!r})")
+        why.append(f"Receiver record interrupted must be False ({l1.get('interrupted')!r})")
     if tx.get("interrupted", False) is not False:       # 송신 기록에도 interrupted(없던 예전 기록은 False 로 봄)
-        why.append(f"송신 기록 interrupted 가 False 아님({tx.get('interrupted')!r})")
+        why.append(f"Sender record interrupted must be False ({tx.get('interrupted')!r})")
     if not _str(tx.get("run")):
-        why.append("송신 기록 run 이 문자열 아님")
+        why.append("Sender record run must be a string")
     if not isinstance(tx.get("board"), dict) or not all(_str(tx["board"].get(k), True) for k in ("pci", "iface", "iface_pci")):
-        why.append("송신 기록 board 가 객체가 아니거나 pci·iface·iface_pci 가 문자열 아님")
+        why.append("Sender record board must be an object with string pci, iface, and iface_pci fields")
     counts = tx.get("counts")
     if not isinstance(counts, dict) or not all(_nn(counts.get(k)) for k in ("received", "sent", "tagged", "send_errors")):
-        why.append("송신 기록 counts(received·sent·tagged·send_errors 음 아닌 정수) 형식 아님")
+        why.append("Sender record counts must contain nonnegative integers for received, sent, tagged, and send_errors")
     tg = tx.get("tagged_per_ssrc")
     if not isinstance(tg, dict) or not all(isinstance(k, str) and _nn(v) for k, v in tg.items()):
-        why.append("송신 기록 tagged_per_ssrc 형식 아님")
+        why.append("Sender record tagged_per_ssrc has an invalid format")
     for k in ("first_tag_gptp_ns", "last_tag_gptp_ns"):
         if not _nn(tx.get(k), True):
-            why.append(f"송신 기록 {k} 가 음 아닌 정수·null 아님")
+            why.append(f"Sender record {k} must be a nonnegative integer or null")
     runs = l1.get("runs")
     if not isinstance(runs, dict):
-        why.append("수신 기록 runs 가 객체가 아님")
+        why.append("Receiver record runs is not an object")
     else:
         for run, per in runs.items():
             if not isinstance(per, dict):
-                why.append(f"수신 기록 run {run} 이 객체가 아님")
+                why.append(f"Receiver record run {run} is not an object")
                 continue
             for ssrc, v in per.items():
                 ok = isinstance(v, dict) and all(_nn(v.get(k)) for k in ("pkts", "samples", "duplicates_skipped")) \
                     and all(_nn(v.get(k), True) for k in ("first_rx_ns", "last_rx_ns", "first_tx_ns", "last_tx_ns"))
                 if not ok:
-                    why.append(f"수신 기록 run {run} SSRC {ssrc} 형식 아님")
+                    why.append(f"Receiver record run {run} SSRC {ssrc} has an invalid format")
     if not _str(l1.get("rx_iface")):
-        why.append("수신 기록 rx_iface 가 문자열 아님")
+        why.append("Receiver record rx_iface must be a string")
     return why
 
 
@@ -237,101 +237,101 @@ def finalize(rx, tx, gm, max_us, gm_dir=".", gm_max_skew_s=600.0):
     why = []
     l1 = (rx or {}).get("l1") if isinstance(rx, dict) else None
     if not rx or not l1:
-        return {"l1_judgement": "not_judged", "reasons": ["수신 기록에 L1 이 없음"]}
+        return {"l1_judgement": "not_judged", "reasons": ["Receiver record has no L1 data"]}
     if not tx:
-        return {"l1_judgement": "not_judged", "reasons": ["송신 기록 없음"]}
+        return {"l1_judgement": "not_judged", "reasons": ["Sender record is missing"]}
     rec_why = record_errors(rx, tx)       # 입구 계약이 틀리면 뒤 판정(형식 가정)을 하지 않는다
     if rec_why:
         return {"l1_judgement": "not_judged", "reasons": rec_why, "run": tx.get("run") if isinstance(tx, dict) else None}
     # 같은 회차
     if tx.get("complete") is not True or l1.get("complete") is not True:
-        why.append("기록이 끝까지 쓰이지 않음(complete 아님)")
+        why.append("The records were not written to completion")
     if tx.get("format") != "L1v1" or l1.get("format") != "L1v1":
-        why.append("형식이 L1v1 아님")
+        why.append("Record format must be L1v1")
     if tx.get("ext_id") != l1.get("ext_id"):
-        why.append(f"확장 ID 다름(송신 {tx.get('ext_id')}, 수신 {l1.get('ext_id')})")
+        why.append(f"Extension ID mismatch (sender {tx.get('ext_id')}, receiver {l1.get('ext_id')})")
     if not tx.get("acq_id") or tx.get("acq_id") != l1.get("acq_id"):
-        why.append(f"acq_id 다름 또는 없음(송신 {tx.get('acq_id')!r}, 수신 {l1.get('acq_id')!r})")
+        why.append(f"Missing or mismatched acq_id (sender {tx.get('acq_id')!r}, receiver {l1.get('acq_id')!r})")
     run = tx.get("run")
     runs = l1.get("runs") or {}
     per = runs.get(run) if run else None
     other_runs = {k: {s: v.get("pkts") for s, v in d.items()} for k, d in runs.items() if k != run}
     if not per:
-        why.append(f"수신 기록에 송신 run {run} 이 없음")
+        why.append(f"Receiver record does not contain sender run {run}")
         per = {}
     tagged = tx.get("tagged_per_ssrc") or {}
     for ssrc, v in per.items():
         if ssrc not in tagged:
-            why.append(f"SSRC {ssrc} 는 송신이 태그하지 않음")
+            why.append(f"The sender did not tag SSRC {ssrc}")
         elif v["pkts"] - v["duplicates_skipped"] > tagged[ssrc]:
-            why.append(f"SSRC {ssrc} 수신 {v['pkts'] - v['duplicates_skipped']} > 송신 태그 시도 {tagged[ssrc]}")
+            why.append(f"SSRC {ssrc}: received {v['pkts'] - v['duplicates_skipped']}, exceeding the sender's {tagged[ssrc]} tag attempts")
     t0, t1 = tx.get("first_tag_gptp_ns"), tx.get("last_tag_gptp_ns")
     firsts = [v["first_rx_ns"] for v in per.values() if v.get("first_rx_ns") is not None]
     lasts = [v["last_rx_ns"] for v in per.values() if v.get("last_rx_ns") is not None]
     if firsts and (t0 is None or t1 is None or min(firsts) < t0 or max(lasts) > t1 + max_us * 1000):
-        why.append("수신 시각 구간이 송신 태그 구간 밖")
+        why.append("The receive timestamp interval falls outside the sender's tag interval")
     for ssrc, v in per.items():
         a, b = v.get("first_tx_ns"), v.get("last_tx_ns")
         if a is None or b is None or t0 is None or t1 is None or a < t0 or b > t1:
-            why.append(f"SSRC {ssrc} 원소의 송신 시각이 이번 송신 태그 구간 밖이거나 없음(다른 실행 원소 가능)")
+            why.append(f"SSRC {ssrc} carries missing or out-of-interval sender timestamps (possibly from another run)")
     # 장치 연결(각 호스트 안)
     board = tx.get("board") or {}
     if not board.get("pci") or board.get("pci") != board.get("iface_pci"):
-        why.append("송신 시각 보드 PCI 와 송신 --iface PCI 가 같다는 기록 없음")
-    for name, st, want, ifc in (("송신 시작", tx.get("status_start"), board.get("pci"), board.get("iface")),
-                                ("송신 끝", tx.get("status_end"), board.get("pci"), board.get("iface")),
-                                ("수신 시작", l1.get("status_start"), None, l1.get("rx_iface")),
-                                ("수신 끝", l1.get("status_end"), None, l1.get("rx_iface"))):
+        why.append("The sender record does not confirm that the timestamp board and --iface share a PCIe address")
+    for name, st, want, ifc in (("Sender at start", tx.get("status_start"), board.get("pci"), board.get("iface")),
+                                ("Sender at end", tx.get("status_end"), board.get("pci"), board.get("iface")),
+                                ("Receiver at start", l1.get("status_start"), None, l1.get("rx_iface")),
+                                ("Receiver at end", l1.get("status_end"), None, l1.get("rx_iface"))):
         st = st if isinstance(st, dict) else {}
         if not st.get("pci") or st.get("pci") != st.get("iface_pci") or st.get("iface") != ifc or (want is not None and st.get("pci") != want):
-            why.append(f"{name} 상태 장치와 시각 netdev 의 PCI 연결 확인 안 됨")
+            why.append(f"{name}: could not verify the PCIe association of the status device and timestamp interface")
     rs0, rs1 = l1.get("status_start") or {}, l1.get("status_end") or {}
     if isinstance(rs0, dict) and isinstance(rs1, dict) and rs0.get("pci") != rs1.get("pci"):
-        why.append("수신 시작·끝 상태 장치가 다름")
+        why.append("The receiver used different status devices at the start and end")
     # 측정
     samples = sum(v["samples"] for v in per.values())
     if samples == 0:
-        why.append("no_samples: 유효 지연 표본 없음")
+        why.append("no_samples: no valid latency samples")
     # 시간축
     ts, te = tx.get("status_start"), tx.get("status_end")
     rs, re_ = l1.get("status_start"), l1.get("status_end")
-    for name, st in (("송신 시작", ts), ("송신 끝", te), ("수신 시작", rs), ("수신 끝", re_)):
+    for name, st in (("Sender at start", ts), ("Sender at end", te), ("Receiver at start", rs), ("Receiver at end", re_)):
         if not snapshot_ok(st):
-            why.append(f"{name} 동기 상태 확인 안 됨")
+            why.append(f"{name}: synchronization is unconfirmed")
     if not progressed(ts, te):
-        why.append("송신 보드 상태 갱신·resid count 진행 확인 안 됨")
+        why.append("Could not verify that the sender's status updates and resid.count increased")
     if not progressed(rs, re_):
-        why.append("수신 보드 상태 갱신·resid count 진행 확인 안 됨")
+        why.append("Could not verify that the receiver's status updates and resid.count increased")
     if l1.get("rx_ts_gptp") != "1":
-        why.append(f"수신 rx_ts_gptp 가 1 이 아님({l1.get('rx_ts_gptp')!r}): 수신 시각이 gPTP 시각이라는 근거 없음")
+        why.append(f"Receiver rx_ts_gptp is {l1.get('rx_ts_gptp')!r}; expected 1 to establish that receive timestamps use gPTP")
     if "gPTP" not in str(tx.get("time_source", "")):
-        why.append("송신 시각 출처가 보드 gPTP 가 아님")
+        why.append("Sender timestamps do not use the board's gPTP clock")
     gm_why, gm_src_sha = check_gm(gm, gm_dir, tx, l1, gm_max_skew_s)
     why += gm_why
     main_ssrc = max(per, key=lambda k: per[k]["samples"]) if per else None
     counts = tx.get("counts") or {}
     denom = {"tx_counts": counts, "tx_send_errors": counts.get("send_errors"), "tx_tagged_per_ssrc": tagged,
-             "tx_tagged_note": "sendto 전 태그 시도 수(성공 송신 수 아님), send_errors 와 함께 본다",
+             "tx_tagged_note": "Tag attempts are counted before sendto. Interpret them together with send_errors.",
              "rx_totals": {k: rx.get(k) for k in ("pkts", "hw_ts", "sw_ts", "capture_drops", "header_rejects")},
              "rx_excluded": l1.get("excluded"), "rx_header_rejects": l1.get("header_rejects"),
              "rx_other_runs_pkts": other_runs, "rx_run_per_ssrc": per}
     return {"l1_judgement": LABEL if not why else "not_judged", "reasons": why, "run": run, "acq_id": tx.get("acq_id"),
-            "name": "송신 앱 -> 수신 MAC 지연(송신 SW·커널·DMA·큐잉 포함)", "main_ssrc": main_ssrc,
+            "name": "Sender application to receiver MAC latency (includes sender software, kernel, DMA, and queueing)", "main_ssrc": main_ssrc,
             "observed": per.get(main_ssrc) if main_ssrc else None, "denominators": denom, "gm_source_sha256": gm_src_sha,
-            "limits": ["시작·끝 상태만 봄(중간 동기 이탈 배제 아님)", "관측 표본 통계이며 전체 흐름 합격 기준 아님",
-                       "GM 동일성은 사람이 준 수동 근거(--gm-evidence)에 조건부, 자동 조회·검증 아님",
-                       "run 32 비트는 인증값이 아님(우연 일치 확률 2^-32, 송신 시각 구간으로 추가 거름)",
-                       "원 RX·TX·수동 근거 파일과 함께 보존해야 함(inputs 의 SHA-256)"]}
+            "limits": ["Status is sampled only at the start and end; sync can drop between those samples.", "Statistics describe the observed samples and do not determine whether the whole flow passed.",
+                       "A common GM is established only by the supplied manual evidence (--gm-evidence).",
+                       "The 32-bit run ID does not authenticate the sender (accidental match probability 2^-32). The sender timestamp interval also filters samples.",
+                       "Keep the original RX, TX, and manual evidence files with this result (see the SHA-256 hashes in inputs)."]}
 
 
 def main():
-    ap = argparse.ArgumentParser(description="L1 같은 회차 판정")
+    ap = argparse.ArgumentParser(description="Finalize L1 latency for matching sender and receiver records")
     ap.add_argument("rx_json")
     ap.add_argument("tx_json")
     ap.add_argument("--gm-evidence")
-    ap.add_argument("--gm-max-skew-s", type=float, default=600.0, help="GM 근거 채취 시각이 송신 기록 시작·끝에서 벗어나도 되는 초(기본 600)")
-    ap.add_argument("--l1-max-us", type=float, help="기본 = 수신 기록의 값")
-    ap.add_argument("--out", help="결과 파일(이미 있으면 쓰지 않음)")
+    ap.add_argument("--gm-max-skew-s", type=float, default=600.0, help="allowed offset of the GM evidence timestamp from the sender's recorded interval, in seconds (default: 600)")
+    ap.add_argument("--l1-max-us", type=float, help="maximum L1 latency in us (defaults to the receiver record's value)")
+    ap.add_argument("--out", help="write the result to a file that does not already exist")
     a = ap.parse_args()
     res_out = None
     if a.out:
@@ -345,7 +345,7 @@ def main():
     try:
         return _main(a, res_out)
     except KeyboardInterrupt:        # 판정 결과를 게시하지 않고 내 예약만 푼다
-        print("중단됨(Ctrl+C): 결과를 쓰지 않았습니다.", file=sys.stderr)
+        print("Interrupted (Ctrl+C). No result was written.", file=sys.stderr)
         return 130
     finally:
         if res_out is not None:
@@ -361,7 +361,7 @@ def main():
 def max_us_bad(v, src):
     """CLI·파일 l1_max_us 공통 검사. bool 제외 숫자이고 유한한 양수가 아니면 이유 문자열(미판정), 맞으면 None."""
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not v > 0:
-        return f"{src} l1_max_us 가 유한한 양수가 아님({v!r})"
+        return f"{src} l1_max_us must be positive and finite ({v!r})"
     return None
 
 
@@ -380,7 +380,7 @@ def max_us_of(a_max_us, rx):
     v = l1.get("l1_max_us")
     if v is None:
         return 1e6, None
-    e = max_us_bad(v, "수신 기록")
+    e = max_us_bad(v, "Receiver record")
     return (1e6, e) if e else (v, None)
 
 
@@ -394,7 +394,7 @@ def _main(a, res_out):
         gm_dir = os.path.dirname(os.path.abspath(a.gm_evidence)) if a.gm_evidence else "."
         res = finalize(rx, tx, gm, max_us, gm_dir, a.gm_max_skew_s)
     except Exception as e:           # noqa: BLE001 - 입력 형식 가정이 깨진 남은 경로도 예외 대신 미판정
-        res = {"l1_judgement": "not_judged", "reasons": [f"판정 중 예외 {type(e).__name__}: {e}(입력 형식 확인)"]}
+        res = {"l1_judgement": "not_judged", "reasons": [f"Error during finalization: {type(e).__name__}: {e}. Check the input format."]}
     if not isinstance(res.get("reasons"), list):
         res["reasons"] = []
     if e4:
@@ -409,7 +409,7 @@ def _main(a, res_out):
     if res_out is not None:
         pub = res_out.publish(out)
         if pub is not True:
-            print(f"결과 게시 실패: {pub}(결과 파일 없음)", file=sys.stderr)
+            print(f"Could not publish the result: {pub}. No result file was written.", file=sys.stderr)
             return 3
     return 0 if res["l1_judgement"] == LABEL else 3
 

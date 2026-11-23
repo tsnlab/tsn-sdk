@@ -26,11 +26,11 @@ if [ -z "$ko" ]; then
 fi
 
 if [ ! -f "$ko" ]; then
-	echo "check_nofpu: 모듈 파일이 없습니다: $ko" >&2
+	echo "check_nofpu: Module file not found: $ko" >&2
 	exit 2
 fi
 if ! command -v objdump >/dev/null 2>&1; then
-	echo "check_nofpu: objdump 가 없습니다. binutils 를 설치하십시오." >&2
+	echo "check_nofpu: objdump is missing. Install binutils." >&2
 	exit 2
 fi
 
@@ -64,16 +64,16 @@ i386:x86-64*)
 	objdump -d "$obj" >"$tmpdir/dis.txt"
 	if grep -Eq '%[xyz]mm[0-9]+' "$tmpdir/dis.txt"; then
 		count="$(grep -Ec '%[xyz]mm[0-9]+' "$tmpdir/dis.txt")"
-		echo "check_nofpu: 실패. $ko 에 SSE/AVX 레지스터 명령이 ${count} 개 있습니다." >&2
-		echo "check_nofpu: 처음 20 개:" >&2
+		echo "check_nofpu: FAIL: $ko contains ${count} instructions that use SSE/AVX registers." >&2
+		echo "check_nofpu: First 20 matches:" >&2
 		grep -E '%[xyz]mm[0-9]+' "$tmpdir/dis.txt" | head -n 20 >&2
-		echo "check_nofpu: 빌드 플래그에 -msse2 등 FPU/SIMD 옵션이 들어갔는지 확인하십시오." >&2
+		echo "check_nofpu: Check the build flags for FPU/SIMD options such as -msse2." >&2
 		exit 1
 	fi
-	echo "check_nofpu: 통과. $ko ($arch) 에 xmm/ymm/zmm 레지스터 사용이 없습니다."
+	echo "check_nofpu: PASS: $ko ($arch) does not use xmm, ymm, or zmm registers."
 	;;
 *)
-	echo "check_nofpu: $ko 의 아키텍처는 ${arch:-알 수 없음} 입니다. x86_64 가 아니므로 검사하지 않습니다."
+	echo "check_nofpu: Skipping $ko (architecture: ${arch:-unknown}). The check applies to x86_64."
 	;;
 esac
 exit 0

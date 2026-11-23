@@ -57,27 +57,27 @@ def write_preflight(b):
     rec = {"dev": b.dev, "pci": b.bdf}
     errs = []
     if not b.bdf:
-        errs.append("보드 장치의 PCIe 주소를 확인하지 못했습니다(--dev 또는 --iface 로 보드를 고르십시오)")
+        errs.append("Could not identify the board's PCIe address. Select the board with --dev or --iface")
     core = b.rd(0x2000)
     rec["core_version_raw"] = f"0x{core:08X}"
     if core in (0, 0xFFFFFFFF):
-        errs.append("코어 레지스터가 응답하지 않습니다")
+        errs.append("The core registers are not responding")
     if not tsnctl.has_mailbox(b):
-        errs.append("메일박스 상태 블록이 없습니다(이 예제가 지원하지 않는 FPGA 이미지)")
+        errs.append("Mailbox status block unavailable (unsupported FPGA image)")
     else:
         st = tsnctl.status_block(b)
         rec["status_format"], rec["fw_id"] = st["format"], st["fw_id"]
         if st["format"] < MIN_STATUS_FORMAT:
-            errs.append(f"상태 블록 형식 {st['format']} (필요 {MIN_STATUS_FORMAT} 이상)")
+            errs.append(f"Status block format {st['format']} is below the required format {MIN_STATUS_FORMAT}")
         if int(st["fw_id"], 16) not in SUPPORTED_FW:
-            errs.append(f"펌웨어 ID {st['fw_id']} 는 이 예제가 확인한 값이 아닙니다("
+            errs.append(f"Firmware ID {st['fw_id']} is not supported by this example ("
                         + ", ".join(f"0x{k:08X}" for k in SUPPORTED_FW) + ")")
     se = tsnctl.driver_params().get("se_mode")
     rec["se_mode"] = se
     if se != "1":
-        errs.append(f"드라이버 se_mode 가 1 이 아닙니다({se!r})")
+        errs.append(f"Driver se_mode is {se!r}; expected 1")
     if errs:
-        sys.exit("보드 확인에 실패해 아무것도 설정하지 않고 멈춥니다:\n  - " + "\n  - ".join(errs))
+        sys.exit("Board check failed before applying any settings:\n  - " + "\n  - ".join(errs))
     return rec
 
 
@@ -86,7 +86,7 @@ def run_iperf(server, payload, seconds, port):
            "-t", str(seconds), "-J", "--get-server-output"]
     out = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 30)
     if out.returncode != 0:
-        raise RuntimeError(f"iperf3 실패: {out.stdout[-400:]} {out.stderr[-400:]}")
+        raise RuntimeError(f"iperf3 failed: {out.stdout[-400:]} {out.stderr[-400:]}")
     j = json.loads(out.stdout)
     # 수신(서버) 쪽 집계. 서버가 -J 로 실행되면 server_output_json, 아니면 end.sum_received 를 쓴다.
     # iperf3 3.9(Ubuntu 22.04 기본)는 sum_received 가 없고 end.sum 에 수신 쪽 lost_packets 를 싣는다.
@@ -115,32 +115,33 @@ def tas_only_l2(cycle_us, open_us, payload, guard_us=0.0):
 
 
 def main():
-    p = argparse.ArgumentParser(description="TAS·CBS 동시 동작 확인")
-    p.add_argument("--server", required=True, help="수신 장치 IP(iperf3 -s 실행 중)")
+    p = argparse.ArgumentParser(description="Measure TAS and CBS individually and together")
+    p.add_argument("--server", required=True, help="receiver IP address (with iperf3 -s running)")
     p.add_argument("--port", type=int, default=5201)
-    p.add_argument("--payload", type=int, default=1472, help="UDP payload 바이트(1472 이하)")
+    p.add_argument("--payload", type=int, default=1472, help="UDP payload length in bytes (up to 1472)")
     p.add_argument("--cycle", type=int, default=1000, help="TAS cycle us")
-    p.add_argument("--open", type=int, default=500, help="큐 1(호스트 트래픽) 열림 시간 us")
-    p.add_argument("--cbs", type=float, action="append", help="CBS L2 Mbps(여러 번 지정 가능). 기본 300, 600")
-    p.add_argument("--time", type=int, default=10, help="측정 시간 s")
-    p.add_argument("--port-name", default="eth1", help="TAS·CBS 를 걸 보드 포트(eth1 또는 eth2)")
-    p.add_argument("--guardband", type=float, default=0.0, help="큐 1 guard band us(기본 0). 끝나면 시작 전 값으로 되돌린다")
-    p.add_argument("--json", help="결과를 이 파일에 JSON 으로 저장")
-    p.add_argument("--dev", help="보드 장치(/dev/xdmaN_user). 한 PC 에 보드가 여러 장이면 --dev 또는 --iface 로 고른다")
-    p.add_argument("--iface", help="보드 netdev 이름(예 eth1·ens4d1)으로 보드를 고른다")
+    p.add_argument("--open", type=int, default=500, help="queue 1 (host traffic) open time in us")
+    p.add_argument("--cbs", type=float, action="append", help="CBS rate in L2 Mbps (repeatable; default: 300 and 600)")
+    p.add_argument("--time", type=int, default=10, help="measurement duration in seconds")
+    p.add_argument("--port-name", default="eth1", help="board port for TAS and CBS (eth1 or eth2)")
+    p.add_argument("--guardband", type=float, default=0.0,
+                   help="queue 1 guard band in us (default: 0); the prior value is restored on exit")
+    p.add_argument("--json", help="write the result to this JSON file")
+    p.add_argument("--dev", help="board device (/dev/xdmaN_user). With multiple boards, use --dev or --iface")
+    p.add_argument("--iface", help="select the board by Linux interface name (e.g. eth1 or ens4d1)")
     a = p.parse_args()
     cbs_list = a.cbs or [300.0, 600.0]
     if not 0 < a.open < a.cycle:
-        sys.exit("--open 은 0 보다 크고 --cycle 보다 작아야 합니다.")
+        sys.exit("--open must be greater than 0 and less than --cycle.")
 
     b = tsnctl.Bar(a.dev, iface=a.iface)
     pre = write_preflight(b)
-    print(f"보드 확인: {pre['dev']} (PCIe {pre['pci']}), 펌웨어 ID {pre['fw_id']}, se_mode {pre['se_mode']}")
+    print(f"Board check: {pre['dev']} (PCIe {pre['pci']}), firmware ID {pre['fw_id']}, se_mode {pre['se_mode']}")
     sy = tsnctl.sync(b, 1.0)
     ok = sy["synced"] if sy.get("synced") is not None else sy["servo_active"]   # 이전 이미지(메일박스 없음)는 servo_active
-    print(f"gPTP 동기: {'예' if ok else '아니오'} (slave 포트 {sy.get('slave_port')}, offset {sy.get('offset_ns')} ns)")
+    print(f"gPTP synchronized: {'yes' if ok else 'no'} (slave port {sy.get('slave_port')}, offset {sy.get('offset_ns')} ns)")
     if not ok:
-        print("경고: gPTP 동기가 확인되지 않습니다. TAS 시각 기준이 맞지 않을 수 있습니다.")
+        print("Warning: gPTP synchronization is unconfirmed. TAS timing may be inaccurate.")
     port = a.port_name
     lk = tsnctl.link(b, port)
     st0 = tsnctl.tas_status(b, port, samples=1)
@@ -148,10 +149,10 @@ def main():
     cond = {"port": port, "queue": DATA_QUEUE, "link": lk, "guardband_us_before": gb0_us, "guardband_us": a.guardband,
             "tas_enabled_before": st0["enabled"], "cbs_enabled_before": st0["cbs_enabled"],
             "cycle_us": a.cycle, "open_us": a.open, "payload": a.payload, "time_s": a.time}
-    print(f"조건: 포트 {port} 링크 {lk.get('link')} {lk.get('speed_mbps')} Mbps, 큐 {DATA_QUEUE} guard band "
-          f"{gb0_us:g} -> {a.guardband:g} us, cycle {a.cycle} us, 열림 {a.open} us, payload {a.payload} B")
+    print(f"Conditions: port {port}, link {lk.get('link')} {lk.get('speed_mbps')} Mbps, queue {DATA_QUEUE} guard band "
+          f"{gb0_us:g} -> {a.guardband:g} us, cycle {a.cycle} us, open {a.open} us, payload {a.payload} B")
     if not lk.get("dry_run") and lk.get("speed_mbps") != 1000:
-        sys.exit("링크가 1 Gb/s 가 아닙니다. 기대값 모델은 1 Gb/s 기준이라 멈춥니다.")
+        sys.exit("A 1 Gb/s link is required for the expected-rate model.")
 
     # 창 1 = 큐 1 열림, 창 2 = 큐 1 닫힘(gPTP 큐 0·3 은 도구가 항상 연다)
     windows = [(0x02, a.open), (0x00, a.cycle - a.open)]
@@ -165,7 +166,8 @@ def main():
         rows.append(r)
         exp = "-" if expect is None else f"{expect:.1f}"
         dif = "" if not expect else f" ({(r['l2_mbps'] - expect) / expect * 100:+.1f} %)"
-        print(f"{name:<26} 수신 L2 {r['l2_mbps']:7.1f} Mbps  (wire {r['wire_mbps']:7.1f})  근사 기대 {exp:>7}{dif}  {note}")
+        print(f"{name:<26} RX L2 {r['l2_mbps']:7.1f} Mbps  (wire {r['wire_mbps']:7.1f})  "
+              f"approx. expected {exp:>7}{dif}  {note}")
 
     def all_off():
         tsnctl.tas_off(b, port)
@@ -175,25 +177,26 @@ def main():
     try:
         all_off()
         tsnctl.guardband(b, port, DATA_QUEUE, a.guardband)
-        measure("기준(TAS·CBS 끔)", None)
+        measure("Baseline (TAS and CBS off)", None)
 
         tsnctl.tas_set(b, port, a.cycle, windows)
-        measure(f"TAS 만(열림 {a.open}/{a.cycle} us)", round(tas_l2, 1))
+        measure(f"TAS only (open {a.open}/{a.cycle} us)", round(tas_l2, 1))
         tsnctl.tas_off(b, port)
 
         for cbs in cbs_list:
             tsnctl.cbs_set(b, port, 1, cbs)
-            measure(f"CBS 만({cbs:g} Mbps)", cbs)
+            measure(f"CBS only ({cbs:g} Mbps)", cbs)
             tsnctl.tas_set(b, port, a.cycle, windows)
             ma, mb = cbs * open_ratio, min(cbs, tas_l2)
-            measure(f"TAS+CBS({cbs:g} Mbps)", None, f"모델 A {ma:.1f} / 모델 B {mb:.1f}")
+            measure(f"TAS+CBS({cbs:g} Mbps)", None, f"model A {ma:.1f} / model B {mb:.1f}")
             tsnctl.tas_off(b, port)
             tsnctl.cbs_off(b, port, 1)
     finally:
         all_off()
         tsnctl.guardband(b, port, DATA_QUEUE, gb0_us)
-        print(f"정리: TAS 끔, CBS 끔, 큐 {DATA_QUEUE} guard band {gb0_us:g} us 로 되돌림")
-        print("참고: TAS·CBS 를 켠 회차의 iperf3 lost 는 셰이퍼가 줄인 대역보다 많이 보내 생기는 몫입니다(모델). 판정은 수신 L2 대역으로 합니다.")
+        print(f"Cleanup: TAS and CBS off, queue {DATA_QUEUE} guard band restored to {gb0_us:g} us")
+        print("Note: iperf3 reports loss when the offered load exceeds the shaped bandwidth. "
+              "Judge the run by the received L2 rate.")
 
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:

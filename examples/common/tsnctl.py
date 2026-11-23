@@ -74,13 +74,13 @@ def find_dev(dev=None, iface=None, sys_xdma=SYS_XDMA, sys_net=SYS_NET):
             bdf = None
         hit = [d for d in devs if d[1] and d[1] == bdf]
         if not hit:
-            raise SystemExit(f"{iface} 에 해당하는 보드 장치를 찾지 못했습니다(PCIe {bdf}). 보드 목록: {devs or '없음'}")
+            raise SystemExit(f"No board device found for {iface} (PCIe {bdf}). Detected devices: {devs or 'none'}")
         return hit[0]
     if len(devs) == 1:
         return devs[0]
     if not devs:
         return DEV, None                                 # sysfs 를 못 읽는 환경: 예전 기본값(열 때 오류로 알림)
-    raise SystemExit("보드가 여러 장입니다. --dev 또는 --iface 로 하나를 고르십시오: "
+    raise SystemExit("Multiple boards detected. Select one with --dev or --iface: "
                      + ", ".join(f"{d} (PCIe {b})" for d, b in devs))
 
 
@@ -100,7 +100,7 @@ class Bar:
             try:
                 self.fd = os.open(dev, os.O_RDWR | os.O_SYNC)
             except OSError as e:
-                sys.exit(f"{dev} 를 열 수 없습니다({e.strerror}). root 로 실행하고 xdma 드라이버 적재를 확인하십시오.")
+                sys.exit(f"Cannot open {dev} ({e.strerror}). Run as root and check that the XDMA driver is loaded.")
 
     def rd(self, off):
         if self.dry:
@@ -159,7 +159,7 @@ def read_offset(b):
 # ---- 셰이퍼 ---------------------------------------------------------------------------------------
 def shaper(port):
     if port not in PORTS:
-        raise SystemExit("포트는 eth1 또는 eth2 입니다.")
+        raise SystemExit("The port must be eth1 or eth2.")
     return PORTS[port]["shaper"]
 
 
@@ -194,13 +194,13 @@ def tas_set(b, port, cycle_us, windows, allow_ptp_close=False, base_rel_s=2):
     depth_bits = (b.rd(sh + 0x04) >> 24) & 0xFF
     depth = (1 << depth_bits) if depth_bits else 8
     if not 1 <= len(windows) <= depth:
-        raise SystemExit(f"창 개수는 1~{depth} 개입니다.")
+        raise SystemExit(f"Specify between 1 and {depth} windows.")
     if sum(d for _, d in windows) != cycle_us:
-        raise SystemExit("창 길이 합이 --cycle 과 같아야 합니다.")
+        raise SystemExit("Window durations must add up to --cycle.")
     entries = []
     for gate, dur_us in windows:
         if not 0 <= gate <= 0xFF or dur_us <= 0:
-            raise SystemExit(f"잘못된 창: {gate:#x}:{dur_us}")
+            raise SystemExit(f"Invalid window: {gate:#x}:{dur_us}")
         if not allow_ptp_close:
             gate |= PTP_GATE_BITS
         entries.append((gate, dur_us * 1000))
@@ -220,7 +220,7 @@ def tas_set(b, port, cycle_us, windows, allow_ptp_close=False, base_rel_s=2):
     st = tas_status(b, port)
     if not b.dry and (st["enabled"] != 1 or st["cfgerr"]):
         tas_off(b, port)
-        raise SystemExit(f"TAS 가 정상 적용되지 않아 껐습니다: {st}")
+        raise SystemExit(f"TAS did not apply successfully and was disabled: {st}")
     st["base_sec"] = base
     st["windows"] = [f"0x{g:02X}:{d // 1000}us" for g, d in entries]
     return st
@@ -228,16 +228,18 @@ def tas_set(b, port, cycle_us, windows, allow_ptp_close=False, base_rel_s=2):
 
 def cbs_slope(l2_mbps):
     if not 0 < l2_mbps <= 1000:
-        raise SystemExit("CBS 대역은 0 초과 1000 Mbps 이하입니다(L2: 이더넷 헤더~FCS).")
+        raise SystemExit("CBS bandwidth must be greater than 0 and at most 1000 Mbps "
+                         "(L2, Ethernet header through FCS).")
     return round(l2_mbps * 1e6 * CBS_SCALE / CBS_CLOCK_HZ)
 
 
 def cbs_set(b, port, queue, l2_mbps, allow_ptp_queue=False):
     sh = shaper(port)
     if not 0 <= queue <= 7:
-        raise SystemExit("큐는 0~7 입니다.")
+        raise SystemExit("The queue must be between 0 and 7.")
     if queue in PTP_QUEUES and not allow_ptp_queue:
-        raise SystemExit(f"큐 {queue} 는 gPTP 큐입니다. 셰이핑하면 시각 동기가 늦어집니다. 꼭 필요하면 --allow-ptp-queue 를 줍니다.")
+        raise SystemExit(f"Queue {queue} carries gPTP. Shaping delays synchronization. "
+                         "Use --allow-ptp-queue if needed.")
     slope = cbs_slope(l2_mbps)
     b.wr(sh + 0x120 + 4 * queue, 0)
     b.wr(sh + 0x140 + 4 * queue, slope)
@@ -255,7 +257,7 @@ def guardband(b, port, queue, us):
     sh = shaper(port)
     ticks = round(us * 1000 / SYSTICK_NS)
     if not 0 <= ticks <= 0x7FFFFF:
-        raise SystemExit("guardband 범위를 벗어났습니다.")
+        raise SystemExit("The guard band is out of range.")
     b.wr(sh + 0x1020 + 4 * queue, ticks)
     return {"port": port, "queue": queue, "ticks": b.rd(sh + 0x1020 + 4 * queue) & 0x7FFFFF}
 
@@ -346,17 +348,21 @@ def sync(b, seconds, offset_limit=OFFSET_LIMIT_NS):
         if "resid" in st1:                                    # 남는 offset 계산도 진행 중이어야 함(Sync 를 받고 있음)
             alive = alive and st1["resid"]["count"] != st0["resid"]["count"]
         r.update({"synced": bool(s0 and s1 and o0 and o1 and alive), "slave_port": s1,
-                  "residual_source": "firmware(형식 2)" if "resid" in st1 else f"tsnctl({GMOFS_PER_PPB:.4f} x rate_ppb, Sync {SYNC_INTERVAL_S} s 가정)",
+                  "residual_source": ("firmware (format 2)" if "resid" in st1 else
+                                      f"tsnctl ({GMOFS_PER_PPB:.4f} x rate_ppb, "
+                                      f"assuming a {SYNC_INTERVAL_S} s Sync interval)"),
                   "offset_ns": [st0["gptp"]["offset_ns"], st1["gptp"]["offset_ns"]],
                   "rate_ppb": [round(ppb0, 1), round(ppb1, 1)],
                   "offset_residual_ns": [resid(st0, ppb0), resid(st1, ppb1)], "offset_limit_ns": offset_limit,
                   "status_alive": alive,
-                  "criterion": f"SlavePort·asCapable 포트 있음, |offset - {GMOFS_PER_PPB:.4f} x rate_ppb| <= {offset_limit} ns, 상태 블록 갱신 중(시작·끝 두 번)"})
+                  "criterion": f"SlavePort and asCapable port present, "
+                               f"|offset - {GMOFS_PER_PPB:.4f} x rate_ppb| <= {offset_limit} ns, "
+                               "status block advances between samples"})
     else:
-        r["note"] = "dry-run" if b.dry else "메일박스가 없는 이미지라 synced 를 판정하지 못합니다. servo_active 만 참고하십시오."
+        r["note"] = "dry-run" if b.dry else "Cannot determine synced without a mailbox. Use servo_active for reference."
     r.update({"servo_updates": changes, "servo_active": changes >= seconds * 100,
               "rtc_offset": f"{sec} s + {ns & 0x3FFFFFFF} ns", "first_vs_last_changed": first != prev,
-              "servo_note": "servo_active 는 참고 값입니다(RTC offset 갱신 횟수 간접 판정)."})
+              "servo_note": "servo_active is for reference and is inferred from the RTC offset update count."})
     return r
 
 
@@ -373,7 +379,7 @@ def mdio_read(b, base, pa, reg, tries=20000):
     for _ in range(tries):
         if b.rd(base + 0x24) & 1:
             return b.rd(base + 0x28) & 0xFFFF
-    raise SystemExit(f"MDIO 응답 없음(0x{base:05X})")
+    raise SystemExit(f"No MDIO response (0x{base:05X})")
 
 
 def link_via_driver(b, port):
@@ -456,7 +462,8 @@ def has_mailbox(b):
 
 def need_mailbox(b):
     if not b.dry and not has_mailbox(b):
-        raise SystemExit("이 FPGA 이미지에는 PCIe 메일박스가 없습니다(상태 블록 표식 없음). 메일박스가 있는 FPGA 이미지(v3 이상)가 필요합니다.")
+        raise SystemExit("No PCIe mailbox found in this FPGA image (status block marker missing). "
+                         "An image with a mailbox (v3 or later) is required.")
 
 
 def rd_stable(b, off, tries=100):
@@ -468,7 +475,7 @@ def rd_stable(b, off, tries=100):
         if w == v:
             return v
         v = w
-    raise SystemExit(f"메일박스 값이 계속 바뀝니다(0x{off:05X}).")
+    raise SystemExit(f"The mailbox value did not stabilize (0x{off:05X}).")
 
 
 def status_block(b, tries=50):
@@ -482,7 +489,7 @@ def status_block(b, tries=50):
             break
         time.sleep(0.001)
     else:
-        raise SystemExit("상태 블록을 일관되게 읽지 못했습니다.")
+        raise SystemExit("Could not read a consistent status block.")
 
     def mac(lo, hi):
         return ":".join("%02x" % ((lo >> s) & 0xFF) for s in (0, 8, 16, 24)) + ":" + \
@@ -509,26 +516,28 @@ def parse_window(text):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="tsnctl", description="TSN HAT / TSN NIC PCIe 제어(예제용 축소판)")
-    p.add_argument("--dev", default=None, help="보드 장치(/dev/xdmaN_user). 보드가 둘 이상이면 --dev 또는 --iface 필수")
-    p.add_argument("--iface", default=None, help="보드 netdev 이름(예 eth1·ens4d1)으로 보드를 고름")
-    p.add_argument("--dry-run", action="store_true", help="보드에 쓰지 않고 쓰기 순서만 출력")
+    p = argparse.ArgumentParser(prog="tsnctl", description="TSN HAT / TSN NIC PCIe control for SDK examples")
+    p.add_argument("--dev", default=None,
+                   help="board device (/dev/xdmaN_user). With multiple boards, specify --dev or --iface")
+    p.add_argument("--iface", default=None, help="select the board by Linux interface name (e.g. eth1 or ens4d1)")
+    p.add_argument("--dry-run", action="store_true", help="print the register writes without touching the board")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info")
-    lk = sub.add_parser("link", help="포트 링크 상태·속도(PHY)")
+    lk = sub.add_parser("link", help="port link state and speed (PHY)")
     lk.add_argument("--port", default="all", choices=("all", "eth1", "eth2"))
-    sub.add_parser("status", help="gPTP 상태·보드 MAC·DNA(메일박스 이미지)")
+    sub.add_parser("status", help="gPTP state, board MAC addresses, and DNA (mailbox images)")
     s = sub.add_parser("sync")
     s.add_argument("--seconds", type=float, default=2.0)
-    s.add_argument("--offset-limit", type=int, default=OFFSET_LIMIT_NS, help="synced 판정: 남는 offset(gmOffset - 주파수 보정 몫) 범위(ns)")
+    s.add_argument("--offset-limit", type=int, default=OFFSET_LIMIT_NS,
+                   help="maximum residual offset for synced (gmOffset minus the frequency correction, in ns)")
     t = sub.add_parser("tas")
     tsub = t.add_subparsers(dest="op", required=True)
     ts = tsub.add_parser("set")
     ts.add_argument("--port", default="eth1")
     ts.add_argument("--cycle", type=int, required=True, help="cycle us")
     ts.add_argument("--window", action="append", type=parse_window, required=True,
-                    help="<게이트 마스크>:<길이 us>. 비트 n = 큐 n 열림. 예 0x02:500")
-    ts.add_argument("--allow-ptp-close", action="store_true", help="gPTP 큐(0·3)를 닫는 창 허용")
+                    help="<gate mask>:<duration in us>. Bit n opens queue n. Example: 0x02:500")
+    ts.add_argument("--allow-ptp-close", action="store_true", help="allow windows that close gPTP queues 0 and 3")
     for op in ("off", "status"):
         x = tsub.add_parser(op)
         x.add_argument("--port", default="eth1")
@@ -537,8 +546,8 @@ def main():
     cs = csub.add_parser("set")
     cs.add_argument("--port", default="eth1")
     cs.add_argument("--queue", type=int, default=1)
-    cs.add_argument("--rate", type=float, required=True, help="L2 Mbps(이더넷 헤더~FCS)")
-    cs.add_argument("--allow-ptp-queue", action="store_true", help="gPTP 큐(0·3)에 CBS 허용")
+    cs.add_argument("--rate", type=float, required=True, help="L2 Mbps (Ethernet header through FCS)")
+    cs.add_argument("--allow-ptp-queue", action="store_true", help="allow CBS on gPTP queues 0 and 3")
     co = csub.add_parser("off")
     co.add_argument("--port", default="eth1")
     g = co.add_mutually_exclusive_group(required=True)

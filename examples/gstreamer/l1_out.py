@@ -49,7 +49,7 @@ def _ident(st):
     return (st.st_dev, st.st_ino)
 
 
-RETRY_POLICY = "자동 재시도 없음(한 번 시도, held=false). 남은 파일은 실행이 끝났음을 확인한 뒤 README 복구 절차로 사람이 정리"
+RETRY_POLICY = "One attempt was made (held=false), with no automatic retry. Confirm the run has ended, then follow the README recovery steps for any remaining files."
 
 
 def _status(released, code, err=None, note=None, leftover=()):
@@ -71,9 +71,9 @@ def release_exception_status(out, e):
         cands.append({"path": p, "owner": own, "exists": ex})
     left = [c["path"] for c in cands if c["exists"] is not False]
     certain = all(c["owner"] != "unknown" for c in cands if c["exists"] is not False)
-    note = f"해제 중 예외(단계 {tr['stage']}): " + (", ".join(f"{c['path']}({c['owner']}, 있음={c['exists']})" for c in cands) or "후보 없음")
+    note = f"Error during release (stage {tr['stage']}): " + (", ".join(f"{c['path']}({c['owner']}, exists={c['exists']})" for c in cands) or "no candidates")
     if not certain:
-        note += ". 소유 확인 안 됨(불확실): 실행이 끝났음을 확인하고 내용을 본 뒤 README 복구 절차로 정리"
+        note += ". Ownership is unconfirmed. Verify the run has ended and inspect the files before following the README recovery steps."
     st = _status(False, "exception", e, note, left)
     st.update(stage=tr["stage"], candidates=cands, owner_certain=certain)
     return st
@@ -91,19 +91,19 @@ class Out:
         self.release_status = None
         self.release_track = None         # 해제 단계·후보 경로·소유 확인 상태
         if os.path.exists(path):
-            raise Busy(f"{path} 가 이미 있습니다. 회차마다 새 경로를 쓰십시오(이전 기록은 지우지 않음).")
+            raise Busy(f"{path} already exists. Use a new path for each capture; existing records are preserved.")
         try:
             fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            raise Busy(f"{self.lock} 예약이 있습니다(다른 실행 중이거나 강제 종료로 남은 예약). 자동으로 지우지 않습니다.") from None
+            raise Busy(f"Reservation {self.lock} already exists. Another run may be active, or it may have stopped unexpectedly. The reservation is left in place.") from None
         made = None
         try:                              # 여기서 난 실패의 정리 책임은 생성자에 있다
             try:
                 made = _ident(os.fstat(fd))
             except BaseException as e:    # 신원 확인 전 실패 = 빈 예약이 남음(지우지 않음), 진단을 붙임
                 if hasattr(e, "add_note"):
-                    e.add_note(f"{self.lock} 가 남았을 수 있음(첫 fstat 실패, 신원 확인 전이라 자동 삭제 안 함). "
-                               "실행이 끝났음을 확인한 뒤 README 복구 절차로 지우십시오.")
+                    e.add_note(f"{self.lock} may remain after the initial fstat failed. Its identity was not verified. "
+                               "Confirm the run has ended, then follow the README recovery steps.")
                 raise
             f = os.fdopen(fd, "w", encoding="utf-8")
             fd = None
@@ -117,24 +117,24 @@ class Out:
                 try:
                     os.close(fd)
                 except OSError as ce:
-                    note(f"생성 정리: fd 닫기 실패 {type(ce).__name__}(errno {ce.errno}): {ce}")
+                    note(f"Reservation creation cleanup: could not close the descriptor: {type(ce).__name__} (errno {ce.errno}): {ce}")
             if made is not None:
                 try:
                     if _ident(os.stat(self.lock)) == made:
                         os.remove(self.lock)
                     else:
-                        note(f"생성 정리: {self.lock} 가 내가 만든 파일이 아니어서 지우지 않음")
+                        note(f"Reservation creation cleanup: {self.lock} was left in place because it belongs to another process")
                 except FileNotFoundError:
                     pass
                 except OSError as ce:
-                    note(f"생성 정리: {self.lock} 정리 실패 {type(ce).__name__}(errno {ce.errno}): {ce}. "
-                         f"{self.lock} 가 남았을 수 있음(내가 만든 빈 예약, 자동 재시도 없음). 실행이 끝났음을 확인한 뒤 README 복구 절차로 지우십시오.")
+                    note(f"Reservation creation cleanup: {self.lock}: {type(ce).__name__} (errno {ce.errno}): {ce}. "
+                         f"{self.lock} may still contain this run's empty reservation. Confirm the run has ended, then follow the README recovery steps.")
             raise
         self.ident = made
         self.held = True
         if os.path.exists(path):          # 예약 사이에 다른 실행이 결과를 냈으면 내 예약만 풀고 거절
             self.release()
-            raise Busy(f"{path} 가 이미 있습니다.")
+            raise Busy(f"{path} already exists.")
 
     def _owned(self, p):
         """p 가 내 토큰을 담은 객체이고 내가 만든 파일(같은 장치·inode)인지. 읽지 못하거나 형식이 다르면 False."""
@@ -153,13 +153,13 @@ class Out:
     def publish(self, text):
         """내 예약일 때만 게시. 성공 True. 실패하면 이유 문자열. 확인 뒤 link 사이의 외부 교체는 막지 못한다(규칙 7)."""
         if not self.held or not self.mine():
-            return "예약이 내 것이 아님"
+            return "This process does not own the reservation"
         try:
             with open(self.tmp, "x", encoding="utf-8") as f:
                 f.write(text)
             os.link(self.tmp, self.path)
         except OSError as e:
-            return f"게시 실패 {type(e).__name__}: {e}"
+            return f"Publication failed: {type(e).__name__}: {e}"
         finally:
             try:
                 os.remove(self.tmp)
@@ -172,7 +172,7 @@ class Out:
         같은 객체에서 다시 부르면 파일을 건드리지 않고 처음 release_status 를 그대로 둔다(규칙 9). 처리하지 않은 예외는 규칙 10."""
         if not self.held:
             if self.release_status is None:
-                self.release_status = _status(False, "not_held", note="예약을 갖고 있지 않음(해제할 것 없음)")
+                self.release_status = _status(False, "not_held", note="No reservation is held")
             return
         self.held = False                 # 해제는 한 번만 시도(RETRY_POLICY)
         try:
@@ -188,15 +188,15 @@ class Out:
         lock, claim = self.lock, f"{self.lock}.{self.token}.rel"
         self._track("check_mine", (lock, "unknown"))
         if not self.mine():
-            self.release_note = "예약이 내 것이 아니어서 지우지 않음"
+            self.release_note = "The reservation was left in place because it belongs to another process"
             self.release_status = _status(False, "not_mine", note=self.release_note)
             return
         self._track("rename", (lock, "mine"), (claim, "mine"))      # 이름 바꾸기 도중: 둘 중 하나에 내 예약
         try:
             os.rename(self.lock, claim)
         except OSError as e:
-            self.release_note = f"예약 해제 이름 바꾸기 실패 {type(e).__name__}"
-            self.release_status = _status(False, "rename_failed", e, f"{self.lock} 가 남음(내 예약)", [self.lock])
+            self.release_note = f"Could not rename the reservation during release: {type(e).__name__}"
+            self.release_status = _status(False, "rename_failed", e, f"Our reservation remains at {self.lock}", [self.lock])
             return
         self._track("check_claim", (claim, "unknown"))
         if self._owned(claim):
@@ -204,7 +204,7 @@ class Out:
             try:
                 os.remove(claim)
             except OSError as e:
-                self.release_note = f"해제 파일 삭제 실패 {type(e).__name__}: {claim} 남음"
+                self.release_note = f"Could not remove the release file: {type(e).__name__}: {claim} remains"
                 self.release_status = _status(False, "claim_remove_failed", e, self.release_note, [claim])
                 return
             self.release_status = _status(True, "released")
@@ -214,19 +214,20 @@ class Out:
             os.link(claim, self.lock)
         except OSError as e:              # errno 로 구분(EEXIST 만 '원래 이름에 새 예약 있음')
             if isinstance(e, FileExistsError) or e.errno == errno.EEXIST:
-                self.release_note = f"확인 뒤 예약이 바뀜: 남의 예약을 {claim} 로 보존(원래 이름에 새 예약 있음)"
+                self.release_note = f"The reservation changed after verification. Preserved the other reservation at {claim}; a new reservation exists at the original path"
                 code = "foreign_kept_new_reservation"
             else:
-                self.release_note = (f"확인 뒤 예약이 바뀜: 남의 예약을 원래 이름으로 되돌리지 못함({type(e).__name__} errno {e.errno}). "
-                                     f"{claim} 로 보존, 원래 이름은 비어 있을 수 있음")
+                self.release_note = (f"The reservation changed after verification. Could not restore the other reservation at its original path "
+                                     f"({type(e).__name__}, errno {e.errno}). Preserved it at {claim}; the original path may be empty")
                 code = "foreign_restore_failed"
             self.release_status = _status(False, code, e, self.release_note, [claim])
             return
         self._track("remove_foreign_claim", (claim, "foreign"), (lock, "foreign"))
         try:
             os.remove(claim)
-            self.release_note = "확인 뒤 예약이 바뀜: 남의 예약을 되돌림"
+            self.release_note = "The reservation changed after verification. Restored the other reservation."
             self.release_status = _status(False, "foreign_restored", note=self.release_note)
         except OSError as e:
-            self.release_note = f"확인 뒤 예약이 바뀜: 남의 예약을 되돌렸으나 {claim} 삭제 실패"
+            self.release_note = (f"The reservation changed after verification. "
+                                 f"Restored the other reservation, but could not remove {claim}")
             self.release_status = _status(False, "foreign_restored", e, self.release_note, [claim])

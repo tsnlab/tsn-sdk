@@ -127,26 +127,26 @@ def source_iter(spec, chunk):
                     return
                 yield b
     else:
-        sys.exit(f"알 수 없는 입력원: {spec}")
+        sys.exit(f"Unknown input source: {spec}")
 
 
 def main():
-    p = argparse.ArgumentParser(description="센서 데이터 TSN 송신")
-    p.add_argument("--dest", required=True, help="수신 IP")
+    p = argparse.ArgumentParser(description="Send sensor data over TSN")
+    p.add_argument("--dest", required=True, help="receiver IP address")
     p.add_argument("--port", type=int, default=6000)
     p.add_argument("--source", default="sim:lidar")
-    p.add_argument("--rate", type=float, default=10.0, help="sim·file 묶음 주기(Hz). serial·cmd 는 입력 속도를 따른다")
-    p.add_argument("--seconds", type=float, default=0, help="0 = 끝까지")
+    p.add_argument("--rate", type=float, default=10.0, help="frame rate for sim and file inputs (Hz); serial and cmd follow the source rate")
+    p.add_argument("--seconds", type=float, default=0, help="duration in seconds (0: run until the source ends or interrupted)")
     p.add_argument("--stream-id", type=int, default=1)
-    p.add_argument("--chunk", type=int, default=4096, help="file 입력의 묶음 크기")
-    p.add_argument("--no-gptp", action="store_true", help="gPTP 시각 대신 0 을 넣는다(root 아님·PCIe 없음)")
-    p.add_argument("--dev", help="보드 장치(/dev/xdmaN_user). 한 PC 에 보드가 여러 장이면 --dev 또는 --iface 로 고른다")
-    p.add_argument("--iface", help="보드 netdev 이름(예 eth1·ens4d1)으로 보드를 고른다")
+    p.add_argument("--chunk", type=int, default=4096, help="frame size in bytes for file input")
+    p.add_argument("--no-gptp", action="store_true", help="send a zero timestamp instead of gPTP time (no root or PCIe required)")
+    p.add_argument("--dev", help="board device (/dev/xdmaN_user). With multiple boards, use --dev or --iface")
+    p.add_argument("--iface", help="select the board by Linux interface name (e.g. eth1 or ens4d1)")
     a = p.parse_args()
     if not 0 <= a.stream_id <= 255:
-        sys.exit("--stream-id 는 0~255 입니다.")
+        sys.exit("--stream-id must be between 0 and 255.")
     run_id = int.from_bytes(os.urandom(8), "big")
-    print(f"송신 시작: 스트림 {a.stream_id}, 실행 식별값 {run_id:016x}", flush=True)
+    print(f"Sending: stream={a.stream_id}, run={run_id:016x}", flush=True)
 
     bar = None if a.no_gptp else tsnctl.Bar(a.dev, iface=a.iface)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -176,8 +176,8 @@ def main():
             sent_bytes += len(part)
         frame_no += 1
         if frame_no % max(1, int(a.rate or 10)) == 0:
-            print(f"{time.strftime('%H:%M:%S')} 묶음 {frame_no} 패킷 {pkt_seq} 데이터 {sent_bytes} B", flush=True)
-    print(f"끝: 묶음 {frame_no}, 패킷 {pkt_seq}, 데이터 {sent_bytes} B")
+            print(f"{time.strftime('%H:%M:%S')} frames={frame_no} packets={pkt_seq} bytes={sent_bytes}", flush=True)
+    print(f"Done: frames={frame_no}, packets={pkt_seq}, bytes={sent_bytes}")
 
 
 if __name__ == "__main__":

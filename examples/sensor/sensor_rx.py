@@ -90,20 +90,20 @@ class Reassembler:
                 continue
             except OSError as e:
                 if e.errno not in (errno.EPERM, errno.EXDEV, errno.ENOTSUP, errno.ENOSYS, errno.EMLINK):
-                    return None, f"격리 실패({e.__class__.__name__}: {e}) - {name} 는 그대로 있으나 무효 묶음이다"
+                    return None, f"Quarantine failed ({e.__class__.__name__}: {e}). {name} remains in place and is invalid"
                 try:                                    # 하드 링크를 못 쓰는 파일 시스템: 새 이름을 배타적으로 만들어 복사
                     with open(src, "rb") as fi, open(dst, "xb") as fo:
                         fo.write(fi.read())
                 except FileExistsError:
                     continue
                 except OSError as e2:
-                    return None, f"격리 실패({e2.__class__.__name__}: {e2}) - {name} 는 그대로 있으나 무효 묶음이다"
+                    return None, f"Quarantine failed ({e2.__class__.__name__}: {e2}). {name} remains in place and is invalid"
             try:
                 os.unlink(src)
             except OSError as e:
-                return dst_name, f"격리 사본은 만들었으나 원래 이름을 지우지 못함({e}) - {name} 는 무효 묶음이다"
+                return dst_name, f"Created a quarantined copy, but could not remove the original ({e}). {name} is invalid"
             return dst_name, None
-        return None, f"격리 실패(빈 이름 없음) - {name} 는 그대로 있으나 무효 묶음이다"
+        return None, f"Quarantine failed (no unused name). {name} remains in place and is invalid"
 
     def _bad(self, why):
         self.bad += 1
@@ -209,16 +209,16 @@ def pct(v, q):
 
 
 def main():
-    p = argparse.ArgumentParser(description="센서 데이터 TSN 수신")
-    p.add_argument("--iface", default="eth1", help="하드웨어 수신 시각을 켤 인터페이스")
+    p = argparse.ArgumentParser(description="Receive sensor data over TSN")
+    p.add_argument("--iface", default="eth1", help="interface on which to enable hardware receive timestamps")
     p.add_argument("--port", type=int, default=6000)
     p.add_argument("--seconds", type=float, default=30)
     p.add_argument("--csv")
     p.add_argument("--out")
-    p.add_argument("--allow-from", action="append", help="이 송신 IP 의 패킷만 받는다(여러 번 지정 가능)")
-    p.add_argument("--max-frame-bytes", type=int, default=16 << 20, help="묶음 길이 상한(기본 16 MiB)")
+    p.add_argument("--allow-from", action="append", help="accept packets only from this sender IP (repeatable)")
+    p.add_argument("--max-frame-bytes", type=int, default=16 << 20, help="maximum frame size in bytes (default: 16 MiB)")
     p.add_argument("--accept-legacy", action="store_true",
-                   help="이전 판 송신기(헤더 버전 1·2)도 받는다. 같은 송신 주소에서 송신기를 다시 시작하면 섞일 수 있다(README 참고)")
+                   help="accept legacy senders (header versions 1 and 2); restarting a sender at the same address can mix runs (see README)")
     a = p.parse_args()
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -235,7 +235,7 @@ def main():
         prev = set_hwts(s, a.iface, 0, req=SIOCGHWTSTAMP)
         set_hwts(s, a.iface, 1, tx_type=prev[1])
     except OSError:
-        print("하드웨어 수신 시각을 켜지 못했습니다. 지연은 계산하지 않습니다.")
+        print("Could not enable hardware receive timestamps. Latency will not be calculated.")
         prev = None
 
     csv = open(a.csv, "w", encoding="utf-8") if a.csv else None
@@ -246,7 +246,7 @@ def main():
     ra = Reassembler(a.out, a.max_frame_bytes, a.allow_from, a.accept_legacy)
     lat = []
     t_end = time.monotonic() + a.seconds
-    print(f"수신 대기: UDP {a.port}, {a.seconds:.0f} s", flush=True)
+    print(f"Waiting for packets: UDP {a.port}, {a.seconds:.0f} s", flush=True)
     try:
         while time.monotonic() < t_end:
             try:

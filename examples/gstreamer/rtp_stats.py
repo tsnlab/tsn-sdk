@@ -323,24 +323,27 @@ def main():
     import os
     import re
     import sys
-    p = argparse.ArgumentParser(description="RTP 수신 품질 측정")
+    p = argparse.ArgumentParser(description="Measure RTP receive quality")
     p.add_argument("--iface", default="eth1")
     p.add_argument("--port", type=int, default=5000)
     p.add_argument("--seconds", type=float, default=30)
-    p.add_argument("--json", help="요약을 이 파일에 저장(--l1-ext-id 를 주면 필수, 이미 있으면 시작하지 않음)")
-    p.add_argument("--l1-ext-id", type=int, help="L1 지연 수집: 송신 rtp_l1_tag.py 의 RTP 헤더 확장 ID(1~14). 주지 않으면 L1 을 모으지 않는다")
-    p.add_argument("--l1-max-us", type=float, default=1e6, help="L1 이 음수이거나 이 값보다 크면 abnormal 로 센다(기본 1 s)")
-    p.add_argument("--acq-id", help="L1 회차 이름(송신 rtp_l1_tag.py --acq-id 와 같게, --l1-ext-id 를 주면 필수)")
-    p.add_argument("--dev", help="수신 보드 장치(상태 블록 읽기용, 보드가 여러 장일 때). --iface 와 같은 보드여야 한다")
+    p.add_argument("--json", help="save the summary here (required with --l1-ext-id; the file must not exist)")
+    p.add_argument("--l1-ext-id", type=int,
+                   help="collect L1 latency using the sender's RTP header extension ID (1-14); omit to skip L1")
+    p.add_argument("--l1-max-us", type=float, default=1e6,
+                   help="mark negative L1 latency or latency above this limit as abnormal (default: 1 s)")
+    p.add_argument("--acq-id", help="L1 capture ID, matching the sender's --acq-id (required with --l1-ext-id)")
+    p.add_argument("--dev", help="receiver board device for status reads; it must match the board selected by --iface")
     a = p.parse_args()
     l1_on = a.l1_ext_id is not None
     if l1_on:
         if not 1 <= a.l1_ext_id <= 14:
-            raise SystemExit("--l1-ext-id 는 1~14 입니다.")
+            raise SystemExit("--l1-ext-id must be between 1 and 14.")
         if not a.acq_id or not re.match(r"^[A-Za-z0-9_.-]{1,64}$", a.acq_id):
-            raise SystemExit("--l1-ext-id 를 쓰면 --acq-id(영문·숫자·_.-, 64 자 이하)가 필요합니다.")
+            raise SystemExit("--l1-ext-id requires --acq-id "
+                             "(up to 64 ASCII letters, digits, underscores, dots, or hyphens).")
         if not a.json:
-            raise SystemExit("--l1-ext-id 를 쓰면 --json(이 회차 새 경로)이 필요합니다.")
+            raise SystemExit("--l1-ext-id requires --json with a new path for this capture.")
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import l1_out
         try:
@@ -374,9 +377,10 @@ def main():
             l1_status_start = read_status(a.dev, a.iface)
             l1_rx_ts_gptp = read_rx_param("rx_ts_gptp")
             if l1_status_start is None:
-                raise RuntimeError("수신 보드 상태를 읽지 못했습니다(장치·메일박스)")
+                raise RuntimeError("Could not read the receiver board status (device or mailbox unavailable)")
             if l1_status_start.get("pci") is None or l1_status_start.get("pci") != l1_status_start.get("iface_pci"):
-                raise RuntimeError(f"상태 장치 PCIe {l1_status_start.get('pci')} 와 --iface {a.iface} PCIe {l1_status_start.get('iface_pci')} 가 다릅니다")
+                raise RuntimeError(f"Status device PCIe address {l1_status_start.get('pci')} "
+                                   f"differs from --iface {a.iface} ({l1_status_start.get('iface_pci')})")
         s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
         s.bind((a.iface, 0))
         s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPING, FLAGS)
@@ -394,7 +398,8 @@ def main():
         sec = {"pkts": 0, "bytes_l2": 0, "gap": 0}
         t_end = time.monotonic() + a.seconds
         t_tick = time.monotonic() + 1
-        print(f"수신 대기: {a.iface} UDP {a.port}, {a.seconds:.0f} s" + (f", L1 회차 {a.acq_id}" if l1_on else ""), flush=True)
+        print(f"Waiting for packets: {a.iface} UDP {a.port}, {a.seconds:.0f} s"
+              + (f", L1 capture {a.acq_id}" if l1_on else ""), flush=True)
         while time.monotonic() < t_end:
             if time.monotonic() >= t_tick:
                 main_st = max(streams.values(), key=lambda x: x["pkts"]) if streams else None
@@ -502,7 +507,7 @@ def main():
             l1_stage = "end_status"
             l1_status_end = read_status(a.dev, a.iface)
             if l1_status_end is None:
-                raise RuntimeError("끝 상태를 읽지 못했습니다")
+                raise RuntimeError("Could not read the final receiver status")
             l1_stage = "done"
     except (Exception, KeyboardInterrupt) as e:      # noqa: BLE001 - L1 회차는 미완 기록을 남긴다. L1 을 쓰지 않으면 예전처럼 그대로 올린다
         if not l1_on:
@@ -549,11 +554,13 @@ def main():
             l1_interrupted = l1_c_intr
             l1_stage = "cleanup"
         if l1_err is None and l1_box["extra_interrupts"]:    # 정상 끝의 정리 중 첫 Ctrl+C(실제 신호) = 이 회차의 취소 원인
-            l1_err = "stage cleanup: KeyboardInterrupt: 정리 중 첫 Ctrl+C(SIGINT)"
+            l1_err = "stage cleanup: KeyboardInterrupt: first Ctrl+C (SIGINT) during cleanup"
             l1_interrupted = True
             l1_stage = "cleanup"
             l1_finish_cause = True
-        summ["l1"] = {"format": "L1v1", "acq_id": a.acq_id, "ext_id": a.l1_ext_id, "name": "송신 앱 -> 수신 MAC 지연(송신 SW·커널·DMA·큐잉 포함)",
+        summ["l1"] = {"format": "L1v1", "acq_id": a.acq_id, "ext_id": a.l1_ext_id,
+                      "name": "Sender application to receiver MAC latency "
+                              "(includes sender software, kernel, DMA, and queueing)",
                       "rx_iface": a.iface, "rx_dev": a.dev, "rx_ts_gptp": l1_rx_ts_gptp, "l1_max_us": a.l1_max_us,
                       "wall_start_utc": l1_wall_start, "wall_end_utc": utc_now(),
                       "status_start": l1_status_start, "status_end": l1_status_end,
@@ -564,15 +571,17 @@ def main():
                       "cleanup_first_error_cancel": l1_c_intr,
                       "extra_interrupts_during_finish": l1_box["extra_interrupts"],
                       "finish_interrupt_is_cause": l1_finish_cause, "capture_drops_status": l1_stats_status,
-                      "interrupt_count_boundary": "기록 JSON 을 만들기 직전까지의 SIGINT 만 센다. 그 뒤(게시·해제 중)는 표준출력 after_record_interrupts",
+                      "interrupt_count_boundary": "Counts SIGINT through record creation. Later interrupts during "
+                                                  "publication and release appear as after_record_interrupts on stdout.",
                       "complete": l1_err is None,
-                      "note": "판정은 l1_finalize.py <이 파일> <송신 기록> --gm-evidence <수동 근거> 로 한다. 시작·끝 상태 기록은 중간 동기 이탈을 배제하지 않는다."}
+                      "note": "Finalize with l1_finalize.py <this file> <sender record> --gm-evidence <manual evidence>. "
+                              "Start and end status cannot rule out a loss of sync during capture."}
     if l1_on:    # 예약한 경로에 게시(먼저 난 결과를 덮지 않음). 게시 중 예외·취소도 받아 자기 예약은 푼다(남의 예약·결과는 그대로)
         pub = None
         try:
             pub = l1_res.publish(json.dumps(summ, ensure_ascii=False, indent=1))
         except (Exception, KeyboardInterrupt) as e:    # noqa: BLE001
-            pub = f"게시 중 {type(e).__name__}: {e}"
+            pub = f"Error during publication: {type(e).__name__}: {e}"
         finally:
             try:
                 l1_res.release()
@@ -581,7 +590,8 @@ def main():
             restore_sigint(l1_old_sigint)
         after = l1_box["after_record"]      # 처리기 복원 뒤의 Ctrl+C 는 기본 동작(이 도구가 세지 않음, 보장 밖)
         if pub is not True:     # 디스크에 기록이 없다: 성공 JSON 을 내지 않고, 복구 근거로 게시 못 한 기록을 표준출력에 남긴다
-            print(json.dumps({"published": False, "error": f"기록 게시 실패: {pub}", "record_path": a.json,
+            print(json.dumps({"published": False, "error": f"Could not publish the record: {pub}",
+                              "record_path": a.json,
                               "after_record_interrupts": after, "reservation_release": l1_res.release_status,
                               "unpublished_record": summ}, ensure_ascii=False))
             raise SystemExit(3)

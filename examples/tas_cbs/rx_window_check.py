@@ -55,7 +55,7 @@ def capture(iface, port, maxn, timeout_s):
         hwts(s, iface, HWTSTAMP_FILTER_ALL, tx_type=prev[1])
         s.settimeout(0.5)
         t_end = time.monotonic() + timeout_s
-        print(f"수신 대기: {iface} UDP {port}, 최대 {maxn} 프레임 / {timeout_s:.0f} s", flush=True)
+        print(f"Waiting for packets: {iface} UDP {port}, up to {maxn} frames / {timeout_s:.0f} s", flush=True)
         while len(ts_list) < maxn and time.monotonic() < t_end:
             try:
                 data, anc, _, _ = s.recvmsg(2048, 256)
@@ -93,13 +93,13 @@ def capture(iface, port, maxn, timeout_s):
 def check_args(cycle_us, open_us, slack_us):
     """설정값 확인. 맞지 않으면 이유 문자열, 맞으면 None."""
     if cycle_us <= 0:
-        return "--cycle 은 0 보다 커야 합니다."
+        return "--cycle must be greater than 0."
     if not 0 < open_us < cycle_us:
-        return "--open 은 0 보다 크고 --cycle 보다 작아야 합니다."
+        return "--open must be greater than 0 and less than --cycle."
     if not 0 <= slack_us < cycle_us - open_us:
-        return "--slack 은 0 이상이고 (cycle - open) 보다 작아야 합니다. 아니면 모든 위치가 창 안이 됩니다."
+        return "--slack must be at least 0 and less than (cycle - open), so the window does not cover the whole cycle."
     if 1_000_000 % cycle_us:
-        return "--cycle 은 1 s(1000000 us)를 나누어 떨어지는 값이어야 합니다(예 1000, 500, 250). 다른 값은 확인하지 않았습니다."
+        return "--cycle must divide one second (1,000,000 us) evenly (e.g. 1000, 500, or 250)."
 
     return None
 
@@ -134,15 +134,15 @@ def analyze(ts_list, cycle_us, open_us, slack_us, base_sec=None):
 
 
 def main():
-    p = argparse.ArgumentParser(description="수신 하드웨어 시각으로 TAS 창 확인")
+    p = argparse.ArgumentParser(description="Check the TAS arrival window with hardware receive timestamps")
     p.add_argument("--iface", default="eth1")
-    p.add_argument("--port", type=int, default=5201, help="UDP 목적지 포트(iperf3 기본 5201)")
-    p.add_argument("--cycle", type=int, required=True, help="송신 TAS cycle us")
-    p.add_argument("--open", type=int, required=True, help="송신 큐 1 열림 시간 us(cycle 시작부터)")
-    p.add_argument("--slack", type=float, default=20.0, help="허용 지연 us")
+    p.add_argument("--port", type=int, default=5201, help="UDP destination port (iperf3 default: 5201)")
+    p.add_argument("--cycle", type=int, required=True, help="sender TAS cycle in us")
+    p.add_argument("--open", type=int, required=True, help="duration in us that sender queue 1 is open from the start of each cycle")
+    p.add_argument("--slack", type=float, default=20.0, help="allowed extra arrival time in us")
     p.add_argument("--frames", type=int, default=50000)
     p.add_argument("--timeout", type=float, default=60.0)
-    p.add_argument("--json", help="결과 JSON 파일")
+    p.add_argument("--json", help="write the result to this JSON file")
     a = p.parse_args()
     err = check_args(a.cycle, a.open, a.slack)
     if err:
@@ -152,9 +152,10 @@ def main():
     r.update(no_timestamp=no_ts, capture_drops=drops, cycle_us=a.cycle, open_us=a.open, slack_us=a.slack)
     print(json.dumps(r, ensure_ascii=False))
     if r["hw_ts_samples"]:
-        print(f"허용 도착 구간 [0, {a.open + a.slack:g} us) 안 {r['inside_window']}/{r['hw_ts_samples']} ({r['inside_ratio']*100:.2f} %, "
-              f"하드웨어 시각이 있는 표본 기준). 시각 없음 {no_ts}, 캡처 손실 {drops}, 관측 {r['observed_s']} s. "
-              f"주기별 첫 도착 중앙값 {r['first_arrival_us_median']} us, 가장 늦은 위치 {r['max_phase_us']} us")
+        print(f"Arrival window [0, {a.open + a.slack:g} us): {r['inside_window']}/{r['hw_ts_samples']} "
+              f"({r['inside_ratio']*100:.2f}%, "
+              f"hardware timestamps only). Missing timestamps {no_ts}, capture drops {drops}, observed {r['observed_s']} s. "
+              f"Median first arrival per cycle {r['first_arrival_us_median']} us, latest arrival {r['max_phase_us']} us")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump(r, f, ensure_ascii=False, indent=1)

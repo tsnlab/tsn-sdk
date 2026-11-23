@@ -39,7 +39,7 @@ The example READMEs call it as `../common/tsnctl.py` from inside each example fo
 | `guardband --port eth1 --queue 1 --us <us>` | Per-queue guard band (default 0; not cleared by `tas off` or `cbs off`, reset with `--us 0`) |
 
 - Common options: `--dev /dev/xdmaN_user` or `--iface <netdev>` to select a board when a host has more than one, `--dry-run` to print the register writes without touching the board.
-- Output is JSON. Messages and help texts are in Korean.
+- Output is JSON. Messages and command-line help are in English.
 - Not included in this version: FPGA image (flash) update, encrypted image handling, firmware command passthrough, frame counters, and FRER, Qci and FPE configuration.
 
 The other programs (`gst_send.sh`, `gst_recv.sh`, `rtp_stats.py` without L1, `sensor_rx.py`, `rx_window_check.py`) do not use it.
@@ -155,4 +155,4 @@ Run the following on both hosts. All commands assume the repository is cloned in
 - Board queues with a lower number are sent first (queue 0 has the highest priority). This is the opposite of the IEEE 802.1Q traffic class numbering convention.
 - Run only one receive measurement program (`rtp_stats.py`, `rx_window_check.py`, `sensor_rx.py`) per interface at a time.
   Each program restores the hardware receive timestamp setting when it exits.
-- Program messages and code comments are in Korean. Command line options, JSON keys and exit codes are documented in English in each README.
+- Program messages and command-line help are in English. Each example README documents its options, JSON fields, and exit codes.

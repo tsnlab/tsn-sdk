@@ -53,7 +53,31 @@ cd ~/tsn-sdk/examples/gstreamer
 
 `gst_send.sh` arguments: `<receiver IP> [port] [width] [height] [fps] [JPEG quality] [pattern]`.
 
-`rtp_stats.py` prints one line per second and a summary JSON at the end.
+### Console output
+
+Both GStreamer terminals should show that the pipeline is playing.
+
+```text
+Setting pipeline to PLAYING ...
+New clock: GstSystemClock
+```
+
+The sender's `timeout 25` command normally returns exit code 124 when the 25 s window ends. The receiver pipeline keeps running until you stop it with Ctrl+C.
+
+The separate `rtp_stats.py` terminal prints a readiness line, then one line per second. This excerpt is from a 25 s color-bar run.
+
+```text
+Waiting for packets: eth1 UDP 5000, 35 s
+21:51:11 pkts=1410 L2_mbps=16.16 gap=0 streams=1 jitter_us=81.3
+```
+
+The final JSON summary includes these fields.
+
+```json
+{"pkts": 35203, "lost": 0, "capture_drops": 0, "active_seconds": 24.933, "L2_mbps": 16.18}
+```
+
+For a clean HAT-to-HAT color-bar run, look for about 35,000 RTP packets over 25 s, `lost: 0`, and `capture_drops: 0`.
 
 | Field | Meaning |
 |---|---|
@@ -133,6 +157,13 @@ Procedure (collect each acquisition under a new name in a new folder, then judge
    ```sh
    python3 l1_finalize.py "$ACQ/rx.json" "$ACQ/tag.json" --gm-evidence "$ACQ/gm.json" --out "$ACQ/l1.json"
    ```
+
+The L1 receiver includes the capture name in its readiness line. Wait for the sender's `Relay ready:` line before sending to the loopback port.
+
+```text
+Waiting for packets: eth1 UDP 5000, 40 s, L1 capture L1_run01
+Relay ready: 127.0.0.1:5004 -> 192.0.2.20:5000 (eth1), extension ID 1, run 7fa12e43, capture L1_run01
+```
 
 Result files and reservations:
 

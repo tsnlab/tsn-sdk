@@ -87,8 +87,29 @@ cd ~/tsn-sdk/examples/sensor
    sudo python3 sensor_tx.py --dest 192.0.2.20 --source sim:lidar --rate 10 --seconds 30
    ```
 
-At the end, the sender prints the number of units and packets sent in its last line (for example 301 units, 602 packets).
-Compare it with `streams.<key>.packets` (number of unique sequence numbers) in the receiver summary. The top-level `packets` also counts duplicates.
+### Console output
+
+Start the sender when the receiver prints its readiness line.
+
+```text
+Waiting for packets: UDP 6000, 35 s
+```
+
+The sender reports its run ID, progress, then the counts for the complete send interval. This excerpt is from a 30 s simulated LiDAR run.
+
+```text
+Sending: stream=1, run=55f3a11d2ce49615
+12:52:32 frames=10 packets=20 bytes=18000
+Done: frames=301, packets=602, bytes=541800
+```
+
+The receiver's final JSON includes these fields.
+
+```json
+{"packets": 602, "complete_frames": 301, "lost_packets": 0, "bad_packets": 0, "latency_us": {"min": 37.3, "median": 47.6, "p99": 65.3, "max": 94.8, "samples": 602}}
+```
+
+Check for about 301 complete frames and zero lost or bad packets. Use the run ID to compare the sender's final packet count with `streams.<key>.packets`, the unique packet count at the receiver. The top-level `packets` also counts duplicates.
 
 Selecting the source (`--source`):
 
@@ -122,12 +143,13 @@ Reference values measured by TSN Lab (through a 1 GbE switch, simulated LiDAR wi
 
 | Direction | Send time | Packets received | Lost | Latency samples | One-way latency (median / 99 % / max) |
 |---|---|---|---|---|---|
-| TSN HAT -> TSN HAT | 30 s | 602 | 0 | 602 | 41.5 / 55.0 / 76.9 us |
-| TSN HAT -> TSN HAT (reverse direction) | 30 s | 602 | 0 | 602 | 38.1 / 56.9 / 92.7 us |
-| TSN HAT -> TSN NIC | 20 s | 402 | 0 | - | 37.5 / 52.5 / 72.9 us |
-| TSN NIC -> TSN HAT | 10 s | 202 | 0 | - | 39.6 / 54.0 / 58.5 us |
+| TSN HAT -> TSN HAT (header v3, console example above) | 30 s | 602 | 0 | 602 | 47.6 / 65.3 / 94.8 us |
+| TSN HAT -> TSN HAT (header v1) | 30 s | 602 | 0 | 602 | 41.5 / 55.0 / 76.9 us |
+| TSN HAT -> TSN HAT (header v1, reverse direction) | 30 s | 602 | 0 | 602 | 38.1 / 56.9 / 92.7 us |
+| TSN HAT -> TSN NIC (header v1) | 20 s | 402 | 0 | - | 37.5 / 52.5 / 72.9 us |
+| TSN NIC -> TSN HAT (header v1) | 10 s | 202 | 0 | - | 39.6 / 54.0 / 58.5 us |
 
-- All values above were measured with earlier versions of these programs that used packet header version 1 (32-byte header without the execution identifier; the receiver grouped packets by stream ID only). The two TSN HAT -> TSN HAT rows come from one 30 s run in each direction with that version; the TSN NIC rows come from an even earlier version. No values measured with the current version (header version 3, chunk checks) are available yet. Values can differ with other FPGA image and driver combinations.
+- Earlier header v1 runs used a 32-byte header without a run ID, and the receiver grouped packets by stream ID only. Latency and packet counts can vary with the run, FPGA image, and driver.
 - Latency = hardware receive time - gPTP time just before sending. It includes sender software (reading the time over PCIe, building the header, `sendto`) and the driver, board and switch path. It is not a MAC-to-MAC latency.
 - Fewer latency samples than received packets mean that some packets had no hardware receive timestamp.
 - Latency is only correct when both boards are synchronized by gPTP.

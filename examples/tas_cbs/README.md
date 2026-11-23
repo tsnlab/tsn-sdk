@@ -93,6 +93,24 @@ This demo leaves TAS and CBS off when it ends; it does not restore a TAS or CBS 
 
 Optional arguments: `--cycle`, `--open`, `--cbs` (repeatable), `--guardband <us>` (default 0), `--time`, `--payload`, `--port-name`, `--json <file>`.
 
+### Run A console output
+
+The receiver's iperf3 terminal prints a `Server listening on 5201` line. The sender prints the board and gPTP checks, one result per setting, then a cleanup line. This excerpt is from a HAT-to-HAT run.
+
+```text
+Board check: /dev/xdma0_user (PCIe 0000:01:00.0), firmware ID 0x20261035, se_mode 1
+gPTP synchronized: yes (slave port ['port1'], offset [115, 106] ns)
+Baseline (TAS and CBS off) RX L2   986.8 Mbps  (wire   999.9)  approx. expected       -
+TAS only (open 500/1000 us) RX L2   497.9 Mbps  (wire   504.4)  approx. expected   497.9 (+0.0 %)
+CBS only (300 Mbps)        RX L2   299.6 Mbps  (wire   303.5)  approx. expected   300.0 (-0.1 %)
+TAS+CBS(300 Mbps)          RX L2   150.9 Mbps  (wire   152.9)  approx. expected       -  model A 150.0 / model B 300.0
+CBS only (600 Mbps)        RX L2   599.2 Mbps  (wire   607.1)  approx. expected   600.0 (-0.1 %)
+TAS+CBS(600 Mbps)          RX L2   303.6 Mbps  (wire   307.6)  approx. expected       -  model A 300.0 / model B 497.9
+Cleanup: TAS and CBS off, queue 1 guard band restored to 0 us
+```
+
+Check for `gPTP synchronized: yes` and six `RX L2` rows with the default settings. TAS alone should reduce the baseline rate. At each CBS setting, the combined TAS+CBS rate should be below CBS alone, and CBS alone should be below the baseline. The rates in the excerpt are reference measurements.
+
 - In steps with TAS or CBS enabled, iperf3 reports a large `lost` value. It sends at line rate while the gate and CBS reduce the bandwidth of queue 1, so the excess overflows in front of the shaper (model). The value this example uses is the received L2 bandwidth. The `lost` value of the baseline step does not identify its cause (check host, board and switch counters separately).
 - With TAS and CBS both enabled, `tsnctl.py cbs set --rate` is the bandwidth while the gate is open. The bandwidth over the whole cycle is rate x open ratio (300 Mbps with a 50 % open window gives about 150 Mbps). For a cycle bandwidth B, set the rate to B / open ratio (at most 1,000 Mbps).
 
@@ -139,6 +157,17 @@ To try a guard band, restart step 1 on the receiver, then run step 3 below on th
    ```
 
 To use a guard band in run A, run `sudo python3 tas_cbs_demo.py --server 192.0.2.20 --guardband 13`. The example restores the previous value at the end.
+
+### Run B console output
+
+`rx_window_check.py` prints a readiness line and, after capturing, a JSON result followed by a summary. This excerpt is from a HAT-to-HAT run with a zero guard band.
+
+```text
+Waiting for packets: eth1 UDP 5201, up to 50000 frames / 60 s
+Arrival window [0, 520 us): 50000/50000 (100.00%, hardware timestamps only). Missing timestamps 0, capture drops 0, observed 4.023 s. Median first arrival per cycle 29.03 us, latest arrival 515.27 us
+```
+
+For the default test, look for 50,000 hardware timestamp samples, all inside `[0, 520)` us, and `capture_drops: 0`. The JSON reports frames without a timestamp separately as `no_timestamp`. If the script prints only the JSON and no arrival summary, check `hw_ts_samples` first.
 
 ## 5. Expected results
 

@@ -25,8 +25,8 @@
 
 extern unsigned int se_mode;
 static bool se_phy_poll_enabled = true;
-module_param_named(se_phy_poll, se_phy_poll_enabled, bool, 0444);
-MODULE_PARM_DESC(se_phy_poll, "Track physical links in SE mode (default on)");
+module_param_named(tsn_phy_poll, se_phy_poll_enabled, bool, 0444);
+MODULE_PARM_DESC(tsn_phy_poll, "Track physical links in SE mode (default on)");
 
 static const unsigned int mdio_base[] = { 0x20000, 0x40000 };
 

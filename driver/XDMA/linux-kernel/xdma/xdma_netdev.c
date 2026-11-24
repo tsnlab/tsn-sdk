@@ -1,6 +1,7 @@
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/flow_offload.h>
+#include <linux/net.h>
 #include <linux/skbuff.h>
 #include <linux/ptp_classify.h>
 
@@ -19,7 +20,7 @@
  * 0 이면 예전처럼 curtime 그대로 준다(A/B 용). */
 static uint rx_ts_gptp = 1;
 module_param(rx_ts_gptp, uint, 0644);
-MODULE_PARM_DESC(rx_ts_gptp, "se_mode RX hwtstamp: 1 = gPTP time (curtime + RTC offset, default), 0 = raw curtime");
+MODULE_PARM_DESC(rx_ts_gptp, "TSN mode RX hwtstamp: 1 = gPTP time (curtime + RTC offset, default), 0 = raw curtime");
 
 /* Continuous receive credits apply to the streaming TSN-SE C2H channel. */
 static bool rx_ring_credits = true;
@@ -66,26 +67,12 @@ module_param(tx_bounce, uint, 0444);
 MODULE_PARM_DESC(tx_bounce,
 	"1=coherent bounce buffer TX (no streaming map), 0=streaming (default)");
 
-/* se_tx_dest_port(2026-09-10): se_mode TX 프레임의 CPU 포트 헤더 DEST_PORT.
- *
- * DEST_PORT[7:0]:
- *   0x00 = MAC Lookup 으로 포워딩 / 0x01 = port 1 / 0x02 = port 2 / 0x80,0xFF = 전 포트
- * 이 값은 ptp_mux 가 프레임별로 metadata2[87:80](= tx_metadata.reserved0[0])에서
- * 읽는다. 0이면 BD 파라미터 DST_PORT_DFLT(현 형상 = 1)로 대체된다
- *
- * ★그래서 지금까지 호스트 TX 프레임은 전부 port 1 단일 포트로만 나갔고 FRER
- * 복제 경로를 타지 못했다(2026-09-10 실측: 코어생성 dst=0x80 -> listener
- * discarded=20(복제 O) / dst=0x01 -> discarded=0 / 호스트 프레임 -> discarded=0
- * = dst=0x01 과 동일). FRER 이중경로로 호스트 payload 를 보내려면 0x80.
- *
- * 기본 0 = 종전 동작 그대로(RTL 기본 포트). 런타임 변경 가능
- * (`/sys/module/xdma/parameters/se_tx_dest_port`)이라 시연 중 전환에 재적재가
- * 필요 없다. se_mode 가 아닐 때는 사용하지 않는다. */
+/* Explicit destination override for the logical FRER interface.
+ * Physical interfaces select their own port in the transmit descriptor. */
 unsigned int se_tx_dest_port;
-module_param(se_tx_dest_port, uint, 0644);
-MODULE_PARM_DESC(se_tx_dest_port,
-	"CPU port TX header DEST_PORT for se_mode frames "
-	"(0=leave RTL default, 0x01=port1, 0x02=port2, 0x80=all ports for FRER dual path)");
+module_param_named(tsn_tx_dest_port, se_tx_dest_port, uint, 0644);
+MODULE_PARM_DESC(tsn_tx_dest_port,
+        "Logical FRER transmit destination (0=default, 0x01=port 1, 0x02=port 2, 0x80=both ports)");
 
 /* rx_cpu_latency_us: 인터페이스가 켜져 있는 동안 CPU 깨어남 지연 상한을 요청한다.
  *
@@ -1090,17 +1077,13 @@ netdev_tx_t xdma_netdev_start_xmit(struct sk_buff *skb,
         tx_metadata = (struct tx_metadata*)&tx_buffer->metadata;
         tx_metadata->frame_length = frame_length;
 
-        /* HAT 모드: 셰이핑/타임스탬프/FRER는 TSN 코어 담당 —
-         * sysclock 읽기·tsn_fill_metadata·TX-TS 슬롯·R-TAG 삽입 전부 우회.
-         * 메타는 frame_length + DEST_PORT만 유효(meta1=0은 ptp_mux가 폐기).
-         * reserved0[0] = CPU-Port 헤더 DEST_PORT 슬롯(metadata2[87:80]) — 0이면
-         * ptp_mux 가 DST_PORT_DFLT(=1)로 대체하므로 단일 포트로만 나간다.
-         * se_tx_dest_port 로 그 슬롯을 채우면 전 포트(0x80) 송신이 되어 코어 FRER
-         * 이중경로에 호스트 프레임이 실린다(파라미터 주석의 실측 근거 참조).
-         * BAR는 코어 APB라 구 레지스터 접근은 전부 무효 주소이므로 반드시 우회. */
+        /* The physical interface is numbered 1 or 2. The mux reads the
+         * corresponding destination from the descriptor for each packet. */
         if (se_mode) {
-                if (se_tx_dest_port)
-                        tx_metadata->reserved0[0] = (uint8_t)se_tx_dest_port;
+                if (ndev->dev_port >= 1 && ndev->dev_port <= XDMA_NUM_PORTS)
+                        tx_metadata->reserved0[0] = (u8)ndev->dev_port;
+                else
+                        tx_metadata->reserved0[0] = (u8)READ_ONCE(se_tx_dest_port);
                 goto se_enqueue;
         }
 
@@ -1301,7 +1284,13 @@ static int xdma_setup_tc_block_cb(enum tc_setup_type type, void *type_data, void
 int xdma_netdev_setup_tc(struct net_device *ndev, enum tc_setup_type type, void *type_data) {
         struct xdma_private *priv = netdev_priv(ndev);
         struct xdma_private_common *common = priv->common;
-        // TODO: TSN config per port
+        if (se_mode && (type == TC_SETUP_QDISC_MQPRIO ||
+                        type == TC_SETUP_QDISC_CBS ||
+                        type == TC_SETUP_QDISC_TAPRIO)) {
+                if (net_ratelimit())
+                        netdev_warn(ndev, "tc hardware offload is unavailable in TSN mode. Use the PCIe shaper controls.\n");
+                return -EOPNOTSUPP;
+        }
 
         switch (type) {
         case TC_SETUP_QDISC_MQPRIO:

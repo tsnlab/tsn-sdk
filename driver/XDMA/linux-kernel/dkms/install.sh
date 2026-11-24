@@ -4,10 +4,12 @@
 # Usage (run as root):
 #   sudo ./install.sh [--version <version>] [--kernel <kernel-release>]
 #   sudo ./install.sh --uninstall
+#   sudo ./install.sh --load-only /path/to/xdma.ko
 #
 #   --version <version>       DKMS version, usually a short Git commit ID (default: 1.0.0).
 #   --kernel <kernel-release> Install only for this kernel; otherwise use all kernels with headers.
 #   --uninstall               Remove all tsn-xdma versions and their configuration files.
+#   --load-only <module>      Load a built module for this boot without changing DKMS or configuration.
 #
 # Installation steps:
 #   1. Copy the driver source to /usr/src/tsn-xdma-<version>.
@@ -24,6 +26,7 @@ PKG="tsn-xdma"
 VERSION="1.0.0"
 KERNEL=""
 UNINSTALL=0
+LOAD_ONLY=""
 
 MODPROBE_CONF="/etc/modprobe.d/tsn-xdma.conf"
 MODLOAD_CONF="/etc/modules-load.d/tsn-xdma.conf"
@@ -58,6 +61,11 @@ while [ $# -gt 0 ]; do
 		KERNEL="$2"
 		shift 2
 		;;
+	--load-only)
+		[ $# -ge 2 ] || die "--load-only requires a built xdma.ko."
+		LOAD_ONLY="$2"
+		shift 2
+		;;
 	--uninstall)
 		UNINSTALL=1
 		shift
@@ -73,6 +81,17 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "Root privileges are required. Run with sudo."
+if [ -n "$LOAD_ONLY" ]; then
+	[ "$UNINSTALL" -eq 0 ] && [ -z "$KERNEL" ] && [ "$VERSION" = "1.0.0" ] ||
+		die "--load-only cannot be combined with installation options."
+	[ -f "$LOAD_ONLY" ] || die "Module file not found: $LOAD_ONLY"
+	[ ! -d /sys/module/xdma ] || die "Unload the current xdma module before using --load-only."
+	modinfo -p "$LOAD_ONLY" | grep -q '^tsn_mode:' ||
+		die "This module does not expose the tsn_mode parameter."
+	/sbin/insmod "$LOAD_ONLY" tsn_mode=1 rx_poll_mode=0 pmac_rx_enable=1
+	log "Loaded the TSN driver for this boot."
+	exit 0
+fi
 command -v dkms >/dev/null 2>&1 || die "DKMS is missing. Run 'apt install dkms'."
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._+-]*$'; then
@@ -260,8 +279,8 @@ done
 read -r -d '' MODPROBE_CONTENT <<'EOF' || true
 # tsn-xdma: driver/dkms/install.sh 가 쓴 파일이다. 직접 고치지 않는다.
 # 커널 내장 xdma(drivers/dma/xilinx)가 아니라 DKMS 로 설치한 TSN xdma.ko 를 적재한다.
-install xdma ko=; for f in updates/dkms/xdma.ko updates/dkms/xdma.ko.zst updates/dkms/xdma.ko.xz extra/xdma.ko extra/xdma.ko.zst extra/xdma.ko.xz; do [ -f /lib/modules/$(uname -r)/$f ] && ko=/lib/modules/$(uname -r)/$f && break; done; [ -n "$ko" ] && /sbin/insmod "$ko" se_mode=1 rx_poll_mode=0 pmac_rx_enable=1
-options xdma se_mode=1 rx_poll_mode=0 pmac_rx_enable=1
+install xdma ko=; for f in updates/dkms/xdma.ko updates/dkms/xdma.ko.zst updates/dkms/xdma.ko.xz extra/xdma.ko extra/xdma.ko.zst extra/xdma.ko.xz; do [ -f /lib/modules/$(uname -r)/$f ] && ko=/lib/modules/$(uname -r)/$f && break; done; [ -n "$ko" ] && /sbin/insmod "$ko" tsn_mode=1 rx_poll_mode=0 pmac_rx_enable=1
+options xdma tsn_mode=1 rx_poll_mode=0 pmac_rx_enable=1
 EOF
 write_file "$MODPROBE_CONF" "$MODPROBE_CONTENT"
 

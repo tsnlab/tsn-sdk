@@ -3,7 +3,7 @@
 메일박스 = PCIe BAR 안에서 보드 펌웨어와 상태를 주고받는 영역(FPGA 이미지 v3 부터). 이 판은 상태 블록 읽기만 한다.
 
 보드가 꽂힌 호스트(Raspberry Pi 5 또는 PC)에서 root 로 실행한다. 표준 라이브러리만 쓴다(Python 3.9 이상).
-드라이버(xdma, se_mode=1)가 적재되어 /dev/xdmaN_user 가 있어야 한다. 보드가 여러 장이면 --dev 또는 --iface 로 고른다.
+드라이버(xdma, tsn_mode=1)가 적재되어 /dev/xdmaN_user 가 있어야 한다. 보드가 여러 장이면 --dev 또는 --iface 로 고른다.
 
 명령:
   info                                   코어 버전·드라이버 설정·현재 시각
@@ -119,7 +119,7 @@ class Bar:
 # ---- 시각 ---------------------------------------------------------------------------------------
 def ofs_sec(hi, lo):
     """RTC offset 초 = 48 비트 부호 있는 값(+0x28 하위 16 비트 = 상위, +0x24 = 하위 32 비트).
-    GM 이 다시 켜져 GM 시각이 보드 curtime 보다 작으면 음수가 된다(드라이버 se_rtc.c 와 같은 해석)."""
+    GM 이 다시 켜져 GM 시각이 보드 curtime 보다 작으면 음수가 된다(드라이버와 같은 부호 해석)."""
     v = ((hi & 0xFFFF) << 32) | lo
     return v - (1 << 48) if v & (1 << 47) else v
 
@@ -266,7 +266,7 @@ def guardband(b, port, queue, us):
 def driver_params():
     d = "/sys/module/xdma/parameters"
     out = {}
-    for k in ("se_mode", "rx_poll_mode", "rx_ts_gptp", "se_tx_dest_port", "tx_prefetch"):
+    for k in ("tsn_mode", "rx_poll_mode", "rx_ts_gptp", "tsn_tx_dest_port", "tx_prefetch"):
         try:
             with open(os.path.join(d, k)) as f:
                 out[k] = f.read().strip()

@@ -1,3 +1,5 @@
+# The untagged examples do not read this file. For tagged examples, replace eth1 with the
+# local interface name. Keep tas and cbs unset in TSN mode to use the board shaper separately.
 nics:
   eth1:  # ifname
     # qos-map

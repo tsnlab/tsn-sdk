@@ -325,12 +325,13 @@ static int xdma_ethtool_get_link_ksettings(struct net_device *netdev, struct eth
 }
 
 static const char xdma_se_stat_names[][ETH_GSTRING_LEN] = {
-	"se_rx_adapter_drop",
-	"se_rx_adapter_data",
-	"se_rx_ts_ofs_valid",
-	"se_rx_ts_ofs_updates",
-	"se_rx_ts_ofs_retries",
-	"se_rx_ts_ofs_rejects",
+	"tsn_rx_adapter_drop",
+	"tsn_rx_adapter_data",
+	"tsn_rx_ts_ofs_valid",
+	"tsn_rx_ts_ofs_updates",
+	"tsn_rx_ts_ofs_retries",
+	"tsn_rx_ts_ofs_rejects",
+	"tsn_rx_port_invalid",
 };
 
 /* 이 이미지에 수신 어댑터 계수 GPIO 가 있는가(상태 블록 형식 3 이상 + 기능 비트). 이전 이미지는 false. */
@@ -408,6 +409,7 @@ static void xdma_ethtool_get_stats(struct net_device *ndev,
 	data[3] = priv->common->rtc.updates;
 	data[4] = priv->common->rtc.retries;
 	data[5] = priv->common->rtc.rejects;
+	data[6] = priv->common->rx_port_invalid;
 }
 
 static const struct ethtool_ops xdma_ethtool_ops = {

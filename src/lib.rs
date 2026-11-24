@@ -128,15 +128,18 @@ pub fn sock_open(
     priority: u32,
     proto: u16,
 ) -> Result<TsnSocket, String> {
-    let name = match create_vlan(ifname, vlanid) {
-        Ok(v) => v,
-        Err(err_msg) => {
-            return Err(format!("Create vlan fails: {}", err_msg));
-        }
+    if vlanid > 4094 {
+        return Err("VLAN ID must be between 0 and 4094".to_string());
+    }
+    let name = if vlanid == 0 {
+        ifname.to_string()
+    } else {
+        create_vlan(ifname, vlanid)?
     };
     let sock;
     let mut res;
-    let ifindex = if_nametoindex(name.as_bytes()).expect("vlan_ifname index");
+    let ifindex =
+        if_nametoindex(name.as_bytes()).map_err(|err| format!("Interface {name}: {err}"))?;
     unsafe {
         sock = libc::socket(
             libc::AF_PACKET,
@@ -154,7 +157,7 @@ pub fn sock_open(
             libc::SOL_SOCKET,
             libc::SO_PRIORITY,
             prio as *const libc::c_void,
-            mem::size_of_val(&prio) as u32,
+            mem::size_of_val(&priority) as u32,
         );
     }
 
@@ -192,13 +195,14 @@ pub fn sock_open(
 }
 
 pub fn sock_close(sock: &mut TsnSocket) -> Result<(), String> {
-    match delete_vlan(&sock.ifname, sock.vlanid) {
-        Ok(_) => {
-            close(sock.fd).unwrap();
-            Ok(())
-        }
-        Err(_) => Err(format!("Delete vlan fails: {}", Error::last_os_error())),
-    }
+    let vlan_result = if sock.vlanid == 0 {
+        Ok(0)
+    } else {
+        delete_vlan(&sock.ifname, sock.vlanid)
+    };
+    let close_result = close(sock.fd).map_err(|err| format!("Close socket: {err}"));
+    vlan_result?;
+    close_result
 }
 
 pub fn sock_set_timeout(sock: &mut TsnSocket, timeout: Duration) -> Result<(), String> {

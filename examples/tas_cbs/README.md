@@ -46,7 +46,7 @@ sudo python3 ../common/tsnctl.py info
 sudo python3 ../common/tsnctl.py sync
 ```
 
-- `info` must show `"se_mode": "1"`.
+- `info` must show `"tsn_mode": "1"`.
 - `sync` must show `"synced": true` (gPTP synchronized). With older FPGA images `synced` is `null`; then check `"servo_active": true`.
 
 ## 3. Run A: bandwidth measurement
@@ -73,8 +73,8 @@ Before writing to the board, the example checks the board with reads only. If an
 
 - The PCIe address of the board device is known (with several boards in one host, select one with `--dev` or `--iface`)
 - The core registers respond and the mailbox status block (format 3 or later) is present
-- The firmware ID is the value this example was checked with (`0x20261035`). The firmware ID identifies the firmware; it does not distinguish FPGA images
-- The driver parameter `se_mode` is 1
+- The mailbox exposes status block format 3 or newer. The selected shaper has a TAS list and the CBS data queue. The firmware ID is reported for diagnostics.
+- The driver parameter `tsn_mode` is 1
 
 If the check passes, the example prints a board check line and stores the result as `preflight` in the `--json` output.
 
@@ -98,7 +98,7 @@ Optional arguments: `--cycle`, `--open`, `--cbs` (repeatable), `--guardband <us>
 The receiver's iperf3 terminal prints a `Server listening on 5201` line. The sender prints the board and gPTP checks, one result per setting, then a cleanup line. This excerpt is from a HAT-to-HAT run.
 
 ```text
-Board check: /dev/xdma0_user (PCIe 0000:01:00.0), firmware ID 0x20261035, se_mode 1
+Board check: /dev/xdma0_user (PCIe 0000:01:00.0), firmware ID 0x20261035, tsn_mode 1
 gPTP synchronized: yes (slave port ['port1'], offset [115, 106] ns)
 Baseline (TAS and CBS off) RX L2   986.8 Mbps  (wire   999.9)  approx. expected       -
 TAS only (open 500/1000 us) RX L2   497.9 Mbps  (wire   504.4)  approx. expected   497.9 (+0.0 %)
@@ -210,7 +210,7 @@ Run B (TAS 500/1000 us + CBS 300 Mbps, HAT -> HAT, 50,000 frames). Summary of th
 | Symptom | What to check |
 |---|---|
 | Error that `/dev/xdma0_user` cannot be opened | Run with `sudo`. Check that the driver is loaded with `lsmod \| grep xdma` |
-| The example reports that the board check failed and stops without configuring anything | Read the reason printed below it. If the firmware ID differs, check `fw_id` in `../common/tsnctl.py status` and use the FPGA image this example was checked with. If `se_mode` is not 1, reload the driver as described in the driver README. If the PCIe address is unknown, pass `--dev` or `--iface` |
+| The example reports that the board check failed and stops without configuring anything | Read the reason printed below it. Check the status block format, the reported queue count and the TAS list capacity for the chosen port. If `tsn_mode` is not 1, reload the driver as described in the driver README. If the PCIe address is unknown, pass `--dev` or `--iface` |
 | `No such file` (`tsnctl.py`, `rx_window_check.py`) | Check that you are in this folder (`examples/tas_cbs`) |
 | Error that the sum of window lengths must equal `--cycle` | Make the window lengths add up to the cycle. The board settings are not changed in this case |
 | The example reports that TAS was not applied correctly and was turned off | Check with `tsnctl.py sync` that gPTP correction is running |

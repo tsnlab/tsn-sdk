@@ -22,8 +22,8 @@
 첫 쓰기 전에 읽기만으로 보드를 확인한다(write_preflight). 하나라도 맞지 않거나 확인하지 못하면 아무것도 쓰지 않고 멈춘다:
   - 고른 보드 장치의 PCIe 주소를 알 수 있음(보드가 여러 장이면 --dev 또는 --iface 로 고름)
   - 코어 레지스터가 응답함, 메일박스 상태 블록이 있음, 상태 블록 형식 3 이상
-  - 펌웨어 ID 가 이 예제를 확인한 값(SUPPORTED_FW)임. 펌웨어 ID 는 펌웨어 호환 확인용이며 FPGA 이미지를 구별하지 않는다
-  - 드라이버 se_mode = 1
+  - 상태 블록 형식과 선택한 포트의 TAS 목록 및 CBS 큐 기능이 예제에 필요하다
+  - 드라이버 tsn_mode = 1
 시작할 때 링크 속도·큐 1 guard band·TAS 상태를 읽어 결과에 남긴다. 링크가 1 Gb/s 가 아니면 멈춘다.
 끝나면 TAS·CBS 를 끄고 큐 1 guard band 를 시작 전 값으로 되돌린다.
 """
@@ -48,11 +48,10 @@ HDR = 8 + 20 + 14 + 4     # UDP + IPv4 + 이더넷 헤더 + FCS
 WIRE_EXTRA = 20           # 프리앰블 8 + IFG 12
 GATE_OPEN_SLACK_US = 0.45 # 창이 닫히기 0.45 us 전까지 시작한 프레임은 나간다(측정값)
 DATA_QUEUE = 1            # 호스트가 보내는 프레임의 하드웨어 큐
-SUPPORTED_FW = {0x20261035: "v3.5"}   # 이 예제를 확인한 펌웨어 ID(호환 확인용, FPGA 이미지 식별 아님)
 MIN_STATUS_FORMAT = 3
 
 
-def write_preflight(b):
+def write_preflight(b, port):
     """첫 쓰기 전 확인(읽기만). 통과하면 확인 내용을, 아니면 이유를 알리고 멈춘다(그때까지 보드 쓰기 0)."""
     rec = {"dev": b.dev, "pci": b.bdf}
     errs = []
@@ -69,13 +68,20 @@ def write_preflight(b):
         rec["status_format"], rec["fw_id"] = st["format"], st["fw_id"]
         if st["format"] < MIN_STATUS_FORMAT:
             errs.append(f"Status block format {st['format']} is below the required format {MIN_STATUS_FORMAT}")
-        if int(st["fw_id"], 16) not in SUPPORTED_FW:
-            errs.append(f"Firmware ID {st['fw_id']} is not supported by this example ("
-                        + ", ".join(f"0x{k:08X}" for k in SUPPORTED_FW) + ")")
-    se = tsnctl.driver_params().get("se_mode")
-    rec["se_mode"] = se
-    if se != "1":
-        errs.append(f"Driver se_mode is {se!r}; expected 1")
+    mode = tsnctl.driver_params().get("tsn_mode")
+    rec["tsn_mode"] = mode
+    if mode != "1":
+        errs.append(f"Driver tsn_mode is {mode!r} (expected 1)")
+    if not errs:
+        core_params = b.rd(0x2004)
+        config = b.rd(tsnctl.shaper(port) + 0x04)
+        queues = (config >> 16) & 0xFF
+        list_width = (config >> 24) & 0xFF
+        rec.update(shaper_queues=queues, tas_list_width=list_width)
+        if ((core_params >> 8) & 0xFF) != 1 or config == 0xFFFFFFFF:
+            errs.append("The selected port does not have the expected TSN shaper registers")
+        elif not 1 <= list_width <= 8 or not DATA_QUEUE < queues <= 8:
+            errs.append("The selected port needs a TAS list and a CBS data queue")
     if errs:
         sys.exit("Board check failed before applying any settings:\n  - " + "\n  - ".join(errs))
     return rec
@@ -135,8 +141,8 @@ def main():
         sys.exit("--open must be greater than 0 and less than --cycle.")
 
     b = tsnctl.Bar(a.dev, iface=a.iface)
-    pre = write_preflight(b)
-    print(f"Board check: {pre['dev']} (PCIe {pre['pci']}), firmware ID {pre['fw_id']}, se_mode {pre['se_mode']}")
+    pre = write_preflight(b, a.port_name)
+    print(f"Board check: {pre['dev']} (PCIe {pre['pci']}), firmware ID {pre['fw_id']}, tsn_mode {pre['tsn_mode']}")
     sy = tsnctl.sync(b, 1.0)
     ok = sy["synced"] if sy.get("synced") is not None else sy["servo_active"]   # 이전 이미지(메일박스 없음)는 servo_active
     print(f"gPTP synchronized: {'yes' if ok else 'no'} (slave port {sy.get('slave_port')}, offset {sy.get('offset_ns')} ns)")

@@ -107,7 +107,11 @@ fn main() {
         .about("Server mode")
         .short_flag('s')
         .arg(arg!(interface: -i --interface <interface> "interface to use").required(true))
-        .arg(arg!(--vlanid <id> "VLAN ID (1-4094)").required(true))
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
+                .required(false)
+                .default_value("0"),
+        )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)
@@ -139,7 +143,11 @@ fn main() {
                 .required(false)
                 .default_value("1000000000"), // 1 Gbps
         )
-        .arg(arg!(--vlanid <id> "VLAN ID (1-4094)").required(true))
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
+                .required(false)
+                .default_value("0"),
+        )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)
@@ -276,17 +284,15 @@ fn do_server(iface_name: String, vlan_id: u16, vlan_pri: u32) {
                     eprintln!("Failed to send packet: {}", e)
                 }
             }
-            PerfOpFieldValues::Data => {
-                unsafe {
-                    STATS.last_id = recv_perf_pkt.get_id();
-                    if STATS.warmup_state == WarmupState::Finished
-                        || STATS.warmup_state == WarmupState::None
-                    {
-                        STATS.pkt_count += 1;
-                        STATS.total_bytes += packet_size + 4/* hidden VLAN tag */;
-                    }
+            PerfOpFieldValues::Data => unsafe {
+                STATS.last_id = recv_perf_pkt.get_id();
+                if STATS.warmup_state == WarmupState::Finished
+                    || STATS.warmup_state == WarmupState::None
+                {
+                    STATS.pkt_count += 1;
+                    STATS.total_bytes += packet_size + if vlan_id == 0 { 0 } else { 4 };
                 }
-            }
+            },
             PerfOpFieldValues::ReqEnd => {
                 println!("Received ReqEnd");
 
@@ -426,7 +432,8 @@ fn do_client(
     let mut last_id = 0;
 
     // Calculate interval between packets to achieve the desired bitrate
-    let packet_bits = (14 + 8 + size + 4) * 8; // Ethernet header + Perf header + payload + VLAN tag
+    let tag_bytes = if vlan_id == 0 { 0 } else { 4 };
+    let packet_bits = (14 + 8 + size + tag_bytes) * 8;
     let interval_sec = packet_bits as f64 / bitrate as f64;
     let interval_ns = (interval_sec * NS_IN_SEC as f64) as u64;
     let mut last_send_time = Instant::now();

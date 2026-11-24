@@ -81,8 +81,8 @@ MODULE_PARM_DESC(rx_poll_mode,
  * 우회한다. TX 메타는 frame_length만 유효(나머지 0 = ptp_mux meta1 폐기 규약),
  * RX 타임스탬프는 코어 헤더 유래 {sec32,ns32}로 해석. 기본 1 (이 트리는 HAT 전용). */
 unsigned int se_mode = 1;
-module_param(se_mode, uint, 0644);
-MODULE_PARM_DESC(se_mode,
+module_param_named(tsn_mode, se_mode, uint, 0644);
+MODULE_PARM_DESC(tsn_mode,
 		 "TSN HAT datapath mode: bypass driver-side shaping/TX-timestamp/FRER, default 1");
 
 unsigned int rtag_duplicate_mac = 1;

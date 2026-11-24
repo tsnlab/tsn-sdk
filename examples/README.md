@@ -16,7 +16,7 @@ All board settings are made over PCIe. No USB/UART cable is needed.
   For time-synchronized examples, the switch must support IEEE 802.1AS (see "gPTP time synchronization" below).
 - FPGA image: checked with FPGA image v3.5 (`"fw_id": "0x20261035"` in `tsnctl.py status`). `tas_cbs_demo.py` accepts only this fw_id.
 - Operating system: Raspberry Pi OS or Ubuntu 24.04 LTS (64-bit) on the Raspberry Pi 5. Build the driver against the headers for the running kernel.
-- Driver: the XDMA driver in this repository (`driver/XDMA/linux-kernel`), loaded with `se_mode=1` (see "Installation" below and [`README_TSN_HAT.md`](../driver/XDMA/linux-kernel/README_TSN_HAT.md)).
+- Driver: the XDMA driver in this repository (`driver/XDMA/linux-kernel`), loaded with `tsn_mode=1` (see "Installation" below and [`README_TSN_HAT.md`](../driver/XDMA/linux-kernel/README_TSN_HAT.md)).
 - Python 3.9 or later (`python3 --version`). The Python shipped with Raspberry Pi OS is sufficient.
   The Python programs use only the standard library.
 - Root privileges (`sudo`) for most programs (PCIe register access, raw packet capture, hardware timestamps).
@@ -85,17 +85,17 @@ Run the following on both hosts. All commands assume the repository is cloned in
    git clone https://github.com/tsnlab/tsn-sdk.git
    cd ~/tsn-sdk/driver/XDMA/linux-kernel/xdma
    make
-   sudo insmod xdma.ko se_mode=1
+   sudo insmod xdma.ko tsn_mode=1
    ```
 
-   A manual `insmod` load lasts until reboot. After each reboot, rerun `sudo insmod xdma.ko se_mode=1` from `~/tsn-sdk/driver/XDMA/linux-kernel/xdma` before doing step 4.
+   A manual `insmod` load lasts until reboot. After each reboot, rerun `sudo insmod xdma.ko tsn_mode=1` from `~/tsn-sdk/driver/XDMA/linux-kernel/xdma` before doing step 4.
    If you installed the driver with the SDK's [DKMS procedure](../driver/XDMA/linux-kernel/README_TSN_HAT.md#3-드라이버-빌드와-적재), it loads automatically at boot. Proceed to step 4 to verify it.
 
-4. Check the driver. `se_mode` must be `1`, and the `dmesg` command must print a line.
+4. Check the driver. `tsn_mode` must be `1`, and the `dmesg` command must print a line.
 
    ```sh
    lsmod | grep xdma
-   cat /sys/module/xdma/parameters/se_mode
+   cat /sys/module/xdma/parameters/tsn_mode
    sudo dmesg | grep "netdev MAC from board DNA"
    ```
 
@@ -150,7 +150,7 @@ Run the following on both hosts. All commands assume the repository is cloned in
 - Every frame sent by the board host goes to hardware queue 1 of the board. These examples only add a VLAN PCP tag.
   Queue classification by PCP is done by an external TSN switch, which needs a PCP-to-queue mapping (see section 6 of `gstreamer/README.md`).
 - `tas_cbs/tas_cbs_demo.py` checks the board, firmware and driver mode before writing anything, and stops without writing if they do not match.
-  Running `tsnctl.py` directly to change TAS, CBS or guard band does not perform this check. Check `fw_id` in `status` and the driver `se_mode` first.
+  Running `tsnctl.py` directly to change TAS, CBS or guard band does not perform this check. Check `fw_id` in `status` and the driver `tsn_mode` first.
 - The sensor example uses packet header version 3. By default the receiver does not accept packets from older senders (header versions 1 and 2). See section 2 of `sensor/README.md`. Use the same version on sender and receiver.
 - Board queues with a lower number are sent first (queue 0 has the highest priority). This is the opposite of the IEEE 802.1Q traffic class numbering convention.
 - Run only one receive measurement program (`rtp_stats.py`, `rx_window_check.py`, `sensor_rx.py`) per interface at a time.

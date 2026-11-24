@@ -284,17 +284,15 @@ fn do_server(iface_name: String, vlan_id: u16, vlan_pri: u32) {
                     eprintln!("Failed to send packet: {}", e)
                 }
             }
-            PerfOpFieldValues::Data => {
-                unsafe {
-                    STATS.last_id = recv_perf_pkt.get_id();
-                    if STATS.warmup_state == WarmupState::Finished
-                        || STATS.warmup_state == WarmupState::None
-                    {
-                        STATS.pkt_count += 1;
-                        STATS.total_bytes += packet_size + if vlan_id == 0 { 0 } else { 4 };
-                    }
+            PerfOpFieldValues::Data => unsafe {
+                STATS.last_id = recv_perf_pkt.get_id();
+                if STATS.warmup_state == WarmupState::Finished
+                    || STATS.warmup_state == WarmupState::None
+                {
+                    STATS.pkt_count += 1;
+                    STATS.total_bytes += packet_size + if vlan_id == 0 { 0 } else { 4 };
                 }
-            }
+            },
             PerfOpFieldValues::ReqEnd => {
                 println!("Received ReqEnd");
 

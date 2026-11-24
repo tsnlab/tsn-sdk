@@ -138,8 +138,8 @@ pub fn sock_open(
     };
     let sock;
     let mut res;
-    let ifindex = if_nametoindex(name.as_bytes())
-        .map_err(|err| format!("Interface {name}: {err}"))?;
+    let ifindex =
+        if_nametoindex(name.as_bytes()).map_err(|err| format!("Interface {name}: {err}"))?;
     unsafe {
         sock = libc::socket(
             libc::AF_PACKET,

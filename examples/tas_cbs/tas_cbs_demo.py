@@ -48,7 +48,7 @@ HDR = 8 + 20 + 14 + 4     # UDP + IPv4 + 이더넷 헤더 + FCS
 WIRE_EXTRA = 20           # 프리앰블 8 + IFG 12
 GATE_OPEN_SLACK_US = 0.45 # 창이 닫히기 0.45 us 전까지 시작한 프레임은 나간다(측정값)
 DATA_QUEUE = 1            # 호스트가 보내는 프레임의 하드웨어 큐
-SUPPORTED_FW = {0x20261035: "v3.5"}   # 이 예제를 확인한 펌웨어 ID(호환 확인용, FPGA 이미지 식별 아님)
+SUPPORTED_FW = {0x20261035: "v3.5", 0x20261136: "v3.6"}   # 이 예제를 확인한 펌웨어 ID(호환 확인용, FPGA 이미지 식별 아님)
 MIN_STATUS_FORMAT = 3
 
 

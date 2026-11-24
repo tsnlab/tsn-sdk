@@ -643,6 +643,8 @@ static void xdma_rx_process_slot(struct xdma_private_common *common, u32 idx, u3
         struct ptp_device_data *ptp_data;
         struct sk_buff *skb;
         unsigned long ptp_flag;
+        u16 meta_len = rx_buf->metadata.frame_length;
+        unsigned int rx_hw_port = meta_len >> RX_META_PORT_SHIFT;
         /* se_mode: 코어→CPU 경로는 FCS를 이미 제거하고 준다(2026-08-03 ILA 실측:
          * 242B 프레임이 FCS 없이 완전체로 도달). TSNv3 관례의 CRC_LEN 차감을 그대로
          * 두면 진짜 페이로드 4B가 잘려 100B+ 프레임 전멸(IP truncated). */
@@ -654,8 +656,21 @@ static void xdma_rx_process_slot(struct xdma_private_common *common, u32 idx, u3
                 return;
         }
 
+        /* 수신 포트 구분: 코드 2 는 인터페이스 2(ndev[1]), 코드 0·1 은 종전처럼 첫 인터페이스.
+         * 코드 3(범위 밖)이나 없는 인터페이스는 버리고 센다. */
+        if (se_mode) {
+                if (rx_hw_port == RX_META_PORT_INVALID ||
+                    (rx_hw_port == 2 && !xdev->ndev[1])) {
+                        common->rx_port_invalid++;
+                        ndev->stats.rx_dropped++;
+                        return;
+                }
+                if (rx_hw_port == 2)
+                        ndev = xdev->ndev[1];
+        }
+
         if (xdma_se_dma_padding()) {
-                unsigned int frame_len = rx_buf->metadata.frame_length;
+                unsigned int frame_len = meta_len & RX_META_LEN_MASK;
 
                 if (frame_len >= ETH_HLEN && frame_len < skb_len &&
                     ALIGN(frame_len + RX_METADATA_SIZE, 8) == length)

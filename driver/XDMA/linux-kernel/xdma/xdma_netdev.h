@@ -126,6 +126,8 @@ struct xdma_private_common {
 
         int tx_port;
         int rx_port;
+        /* TSN 모드: 수신 포트 코드가 범위 밖(코드 3)이거나 그 인터페이스가 없어 버린 프레임 수 */
+        unsigned long rx_port_invalid;
 
         uint64_t total_tx_count;
         uint64_t total_tx_drop_count;
@@ -185,6 +187,13 @@ struct rx_buffer {
     struct rx_metadata metadata;
     uint8_t data[0];
 } __attribute__((packed, scalar_storage_order("big-endian")));
+
+/* rx_metadata.frame_length: 상위 2비트 = 수신 포트 코드, 하위 14비트 = 프레임 길이.
+ * 코드 0 = 포트 필드가 없는 옛 FPGA 이미지(종전대로 첫 인터페이스), 1·2 = 물리 포트 1·2, 3 = 범위 밖.
+ * 이 필드가 있는 이미지는 새 드라이버와 한 쌍으로만 쓴다. 옛 드라이버는 길이를 14비트로 자르지 않아 길이를 잘못 읽는다. */
+#define RX_META_PORT_SHIFT   14
+#define RX_META_LEN_MASK     0x3FFFu
+#define RX_META_PORT_INVALID 3u
 
 #define RX_METADATA_SIZE (sizeof(struct rx_metadata))
 #define TX_METADATA_SIZE (sizeof(struct tx_metadata))

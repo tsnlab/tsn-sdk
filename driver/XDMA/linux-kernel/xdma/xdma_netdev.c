@@ -25,7 +25,7 @@ MODULE_PARM_DESC(rx_ts_gptp, "TSN mode RX hwtstamp: 1 = gPTP time (curtime + RTC
 /* Continuous receive credits apply to the streaming TSN-SE C2H channel. */
 static bool rx_ring_credits = true;
 module_param(rx_ring_credits, bool, 0444);
-MODULE_PARM_DESC(rx_ring_credits, "Use a continuous credit-gated TSN-SE RX ring");
+MODULE_PARM_DESC(rx_ring_credits, "Use a continuous credit-gated TSN RX ring");
 
 #define RX_RING_CREDIT_RESERVE 16
 
@@ -153,7 +153,7 @@ static inline void xdma_engine_stop_sync(struct xdma_engine *engine)
 static bool tx_h2c_align = true;
 module_param(tx_h2c_align, bool, 0444);
 MODULE_PARM_DESC(tx_h2c_align,
-                 "SE mode: align H2C descriptors and trim C2H DMA padding (default on)");
+                 "TSN mode: align H2C descriptors and trim C2H DMA padding (default on)");
 
 static bool xdma_se_dma_padding(void)
 {

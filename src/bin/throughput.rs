@@ -107,7 +107,11 @@ fn main() {
         .about("Server mode")
         .short_flag('s')
         .arg(arg!(interface: -i --interface <interface> "interface to use").required(true))
-        .arg(arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)").default_value("0"))
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
+                .required(false)
+                .default_value("0"),
+        )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)
@@ -139,7 +143,11 @@ fn main() {
                 .required(false)
                 .default_value("1000000000"), // 1 Gbps
         )
-        .arg(arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)").default_value("0"))
+        .arg(
+            arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
+                .required(false)
+                .default_value("0"),
+        )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
                 .required(false)

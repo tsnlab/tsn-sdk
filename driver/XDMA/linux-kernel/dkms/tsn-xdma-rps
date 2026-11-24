@@ -1,5 +1,5 @@
 #!/bin/sh
-# Select CPU1-3 for receive processing on the TSN-SE XDMA interfaces.
+# Select CPU1-3 for receive processing on the TSN XDMA interfaces.
 set -eu
 
 [ "$#" -eq 1 ] || exit 1

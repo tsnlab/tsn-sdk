@@ -17,7 +17,7 @@
 #   3. Register, build, and install with DKMS. Check the build for SIMD register use.
 #   4. Set /etc/modprobe.d/tsn-xdma.conf. Back up a different existing file in /var/backups.
 #   5. Configure /etc/modules-load.d/tsn-xdma.conf to load xdma at boot.
-#   6. Install a udev rule to apply the RPS mask to TSN-SE receive queues.
+#   6. Install a udev rule to apply the RPS mask to TSN receive queues.
 #   7. Update the initramfs for the target kernel.
 # The script can be run again with the same settings.
 set -euo pipefail
@@ -287,7 +287,7 @@ write_file "$MODPROBE_CONF" "$MODPROBE_CONTENT"
 # 5. 부팅 시 자동 적재.
 write_file "$MODLOAD_CONF" "xdma"
 
-# 6. TSN-SE 포트가 등록될 때 CPU1-3으로 수신 처리를 분산한다.
+# 6. TSN 포트가 등록될 때 CPU1-3으로 수신 처리를 분산한다.
 backup_if_differs "$RPS_HELPER" "$SCRIPT_DIR/tsn-xdma-rps"
 install -D -m 0755 "$SCRIPT_DIR/tsn-xdma-rps" "$RPS_HELPER"
 backup_if_differs "$RPS_RULE" "$SCRIPT_DIR/90-tsn-xdma-rps.rules"

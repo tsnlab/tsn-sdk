@@ -92,7 +92,8 @@ fn main() {
         .arg(
             arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
                 .value_parser(value_parser!(u16).range(0..=4094))
-                .default_value("0"),
+                .default_value("0")
+                .required(false),
         )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")
@@ -151,7 +152,8 @@ fn main() {
         .arg(
             arg!(--vlanid <id> "VLAN ID (0 = untagged, 1-4094 = tagged)")
                 .value_parser(value_parser!(u16).range(0..=4094))
-                .default_value("0"),
+                .default_value("0")
+                .required(false),
         )
         .arg(
             arg!(--pcp <prio> "VLAN priority (PCP, 0-7)")

@@ -597,6 +597,9 @@ struct xdma_dev {
 	struct net_device *ndev[XDMA_NUM_TOTAL_PORTS]; /* net device struct from probe() */
 	struct tsn_config tsn_config;
 	int idx;		/* dev index */
+	u8 image_paired;	/* 0: FPGA image has no RX port metadata or its id is unreadable, 1: paired, 2: check disabled */
+	u32 image_fw_id;	/* status block fw_id read at probe (0 if unknown) */
+	u32 image_usr;		/* USR_ACCESS read at probe (0 if unknown) */
 
 	const char *mod_name;		/* name of module owning the dev */
 

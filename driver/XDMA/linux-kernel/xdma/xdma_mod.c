@@ -117,6 +117,19 @@ end:
 #define SE_STATUS_FORMAT	0x04
 #define SE_STATUS_FEATURES	0x64	/* 형식 3 이상 */
 #define SE_FEAT_RXSTATS		BIT(0)
+#define SE_STATUS_FWID		0x50	/* firmware id word of the status block */
+#define SE_USR_OFF		0xA0000	/* axi_gpio_usr DATA = USR_ACCESS */
+/* First image whose core-to-CPU header carries the RX port code (rx_metadata.frame_length[15:14]).
+ * The port code and this driver are a pair: an older image never sets it, so port 2 frames cannot be
+ * told apart, and an older driver reads the length wrongly from a newer image. */
+#define SE_RXPORT_MIN_FWID	0x20261138u
+
+/* Image/driver pairing check at probe: 0 = off, 1 = warn and keep the legacy single-port receive
+ * mapping (default), 2 = refuse to bind (probe fails with -ENODEV). */
+static unsigned int image_check = 1;
+module_param(image_check, uint, 0644);
+MODULE_PARM_DESC(image_check,
+	"FPGA image / driver pairing check at probe (0=off, 1=warn and use legacy RX mapping (default), 2=refuse to bind)");
 
 /* 보드 DNA 를 읽는다. 상태 블록이 없는 이전 이미지면 바로 false. 블록은 있는데 펌웨어가 아직 DNA 를
  * 안 썼으면 최대 약 2 s 다시 읽는다(probe 직후 MicroBlaze 가 늦을 수 있음). */
@@ -138,6 +151,35 @@ static bool read_board_dna(struct xdma_dev *xdev, uint64_t *dna)
 		s2 = ioread32(st + SE_STATUS_SEQ);
 		if (s1 == s2 && !(s1 & 1) && (hi >> 31)) {
 			*dna = ((uint64_t)(hi & 0x1FFFFFF) << 32) | lo;
+			return true;
+		}
+		msleep(50);
+	}
+	return false;
+}
+
+/* 상태 블록의 fw_id 와 USR_ACCESS 를 읽는다. 상태 블록이 없는 이전 이미지거나 fw_id 가 0 이면 false.
+ * 쓰는 도중 읽지 않도록 seq 를 확인하고, 펌웨어가 아직 안 썼으면 read_board_dna 처럼 최대 약 2 s 기다린다. */
+static bool read_image_id(struct xdma_dev *xdev, u32 *fw_id, u32 *usr)
+{
+	void __iomem *st;
+	u32 s1, s2, id;
+	int i;
+
+	*fw_id = 0;
+	*usr = 0;
+	if (!se_mode || !xdev->bar[0])
+		return false;
+	*usr = ioread32(xdev->bar[0] + SE_USR_OFF);
+	st = xdev->bar[0] + SE_STATUS_OFF;
+	if (ioread32(st) != SE_STATUS_MAGIC)
+		return false;
+	for (i = 0; i < 40; i++) {
+		s1 = ioread32(st + SE_STATUS_SEQ);
+		id = ioread32(st + SE_STATUS_FWID);
+		s2 = ioread32(st + SE_STATUS_SEQ);
+		if (s1 == s2 && !(s1 & 1) && id) {
+			*fw_id = id;
 			return true;
 		}
 		msleep(50);
@@ -332,6 +374,8 @@ static const char xdma_se_stat_names[][ETH_GSTRING_LEN] = {
 	"tsn_rx_ts_ofs_retries",
 	"tsn_rx_ts_ofs_rejects",
 	"tsn_rx_port_invalid",
+	"tsn_image_paired",
+	"tsn_image_fw_id",
 };
 
 /* 이 이미지에 수신 어댑터 계수 GPIO 가 있는가(상태 블록 형식 3 이상 + 기능 비트). 이전 이미지는 false. */
@@ -410,6 +454,8 @@ static void xdma_ethtool_get_stats(struct net_device *ndev,
 	data[4] = priv->common->rtc.retries;
 	data[5] = priv->common->rtc.rejects;
 	data[6] = priv->common->rx_port_invalid;
+	data[7] = xdev->image_paired;
+	data[8] = xdev->image_fw_id;
 }
 
 static const struct ethtool_ops xdma_ethtool_ops = {
@@ -506,6 +552,28 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_out;
 	}
 	dev_set_drvdata(&pdev->dev, xpdev);
+
+	/* The RX port code needs an image that sets it. Say so loudly when the pair does not match. */
+	if (se_mode && image_check) {
+		bool known = read_image_id(xdev, &xdev->image_fw_id, &xdev->image_usr);
+
+		xdev->image_paired = known && xdev->image_fw_id >= SE_RXPORT_MIN_FWID;
+		if (xdev->image_paired) {
+			pr_info("%s: FPGA image fw_id 0x%08X USR 0x%08X carries the RX port code, paired with this driver\n",
+				dev_name(&pdev->dev), xdev->image_fw_id, xdev->image_usr);
+		} else {
+			pr_warn("%s: FPGA image %s (fw_id 0x%08X, USR 0x%08X) does not carry the RX port code that this driver pairs with (fw_id >= 0x%08X). Frames from both ports are delivered on the first interface. Load the matching image or use the driver that came with it.\n",
+				dev_name(&pdev->dev), known ? "is older" : "id is not readable", xdev->image_fw_id,
+				xdev->image_usr, SE_RXPORT_MIN_FWID);
+			if (image_check >= 2) {
+				pr_err("%s: image_check=2, refusing to bind\n", dev_name(&pdev->dev));
+				rv = -ENODEV;
+				goto err_out;
+			}
+		}
+	} else {
+		xdev->image_paired = 2;
+	}
 
 	/* Enable TSN and use Port 1.
 	 * se_mode: BAR0 = 코어 APB. 0x04 = 코어 lookup 제어(bypass 비트)라

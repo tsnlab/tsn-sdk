@@ -658,7 +658,7 @@ static void xdma_rx_process_slot(struct xdma_private_common *common, u32 idx, u3
 
         /* 수신 포트 구분: 코드 2 는 인터페이스 2(ndev[1]), 코드 0·1 은 종전처럼 첫 인터페이스.
          * 코드 3(범위 밖)이나 없는 인터페이스는 버리고 센다. */
-        if (se_mode) {
+        if (se_mode && xdev->image_paired) {
                 if (rx_hw_port == RX_META_PORT_INVALID ||
                     (rx_hw_port == 2 && !xdev->ndev[1])) {
                         common->rx_port_invalid++;

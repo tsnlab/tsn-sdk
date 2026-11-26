@@ -147,6 +147,7 @@ Run the following on both hosts. All commands assume the repository is cloned in
 
 - When running an iperf3 server on a TSN HAT, keep it off CPU0: `taskset -c 1-3 iperf3 -s`.
   On the Raspberry Pi, board receive interrupts are handled on CPU0. With the iperf3 thread on CPU0, receive throughput drops to about 966 Mbps (wire rate).
+- Measure UDP throughput with iperf3 3.17 or later. The 3.16 package in the Ubuntu 24.04 apt repository greatly inflates the receive loss.
 - Every frame sent by the board host goes to hardware queue 1 of the board. These examples only add a VLAN PCP tag.
   Queue classification by PCP is done by an external TSN switch, which needs a PCP-to-queue mapping (see section 6 of `gstreamer/README.md`).
 - `tas_cbs/tas_cbs_demo.py` checks the board, firmware and driver mode before writing anything, and stops without writing if they do not match.
